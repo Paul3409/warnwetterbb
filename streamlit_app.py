@@ -12,11 +12,6 @@ import numpy as np
 # --- 1. SETUP & STYLE ---
 st.set_page_config(page_title="WarnwetterBB | Analyse-Zentrum", layout="wide")
 
-CITIES = {
-    "Berlin": (13.40, 52.52), "Potsdam": (13.06, 52.40),
-    "Cottbus": (14.33, 51.76), "Frankfurt (O)": (14.55, 52.34)
-}
-
 T_COLORS = ['#FF00FF','#800080','#00008B','#0000FF','#ADD8E6','#006400','#008000','#ADFF2F','#FFFF00','#FFD700','#FFA500','#FF0000','#8B0000','#800080']
 cmap_temp = mcolors.LinearSegmentedColormap.from_list("temp", T_COLORS, N=256)
 W_COLORS = ['#ADD8E6', '#0000FF', '#008000', '#FFFF00', '#FFD700', '#FFA500', '#FF0000', '#8B0000', '#800080', '#4B0082']
@@ -38,6 +33,8 @@ with st.sidebar:
     
     st.markdown("---")
     generate = st.button("🚀 Karte generieren", use_container_width=True)
+    
+    st.caption("Hinweis: ICON-D2 deckt nur Deutschland/Mitteleuropa ab. Für Europa-Karten ICON-EU oder GFS wählen.")
 
 # --- 3. ROBUSTER MULTI-FETCH ---
 @st.cache_data(ttl=600)
@@ -64,6 +61,10 @@ def fetch_any_model(model, param, hr):
             
             url = f"https://opendata.dwd.de/weather/nwp/{m_dir}/grib/{run:02d}/{key}/{m_dir}_germany_regular-lat-lon_{l_type}_{dt_s}_{hr:03d}_{lvl + ('_' if lvl else '')}{key}.grib2.bz2"
             
+            # ICON-EU hat eine leicht andere Dateibenennung für "europe" anstatt "germany"
+            if "icon-eu" in m_dir:
+                url = f"https://opendata.dwd.de/weather/nwp/icon-eu/grib/{run:02d}/{key}/icon-eu_europe_regular-lat-lon_{l_type}_{dt_s}_{hr:03d}_{lvl + ('_' if lvl else '')}{key}.grib2.bz2"
+            
             try:
                 r = requests.get(url, timeout=10)
                 if r.status_code == 200:
@@ -71,7 +72,6 @@ def fetch_any_model(model, param, hr):
                         with open("temp.grib", "wb") as out: out.write(f.read())
                     ds = xr.open_dataset("temp.grib", engine='cfgrib')
                     
-                    # LOGISCHER DIMENSIONS-KILLER
                     var = list(ds.data_vars)[0]
                     ds_var = ds[var]
                     drop_dims = {d: 0 for d in ['step', 'height', 'isobaricInhPa', 'time', 'valid_time', 'surface'] if d in ds_var.dims}
@@ -88,7 +88,8 @@ def fetch_any_model(model, param, hr):
             t = now - timedelta(hours=off)
             run = (t.hour // 6) * 6
             dt_s = t.strftime("%Y%m%d")
-            url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?file=gfs.t{run:02d}z.pgrb2.0p25.f{hr:03d}&lev_2_m_above_ground=on&lev_10_m_above_ground=on&lev_500_mb=on&lev_850_mb=on&lev_mean_sea_level=on&var_TMP=on&var_HGT=on&var_GUST=on&var_PRMSL=on&subregion=&leftlon=0&rightlon=25&toplat=60&bottomlat=40&dir=%2Fgfs.{dt_s}%2F{run:02d}%2Fatmos"
+            # Filter-URL erweitert auf GANZ EUROPA (-20 bis 45 Ost, 30 bis 75 Nord)
+            url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?file=gfs.t{run:02d}z.pgrb2.0p25.f{hr:03d}&lev_2_m_above_ground=on&lev_10_m_above_ground=on&lev_500_mb=on&lev_850_mb=on&lev_mean_sea_level=on&var_TMP=on&var_HGT=on&var_GUST=on&var_PRMSL=on&subregion=&leftlon=-20&rightlon=45&toplat=75&bottomlat=30&dir=%2Fgfs.{dt_s}%2F{run:02d}%2Fatmos"
             try:
                 r = requests.get(url, headers=headers, timeout=15)
                 if r.status_code == 200:
@@ -119,14 +120,16 @@ if generate:
     elif data is not None:
         fig, ax = plt.subplots(figsize=(8, 10), subplot_kw={'projection': ccrs.PlateCarree()}, dpi=120)
         
-        ext = {"Deutschland": [5.8, 15.2, 47.2, 55.1], "Brandenburg/Berlin": [11.2, 14.8, 51.2, 53.6], "Mitteleuropa (DE, PL)": [4.0, 25.0, 45.0, 56.0], "Alpenraum": [5.5, 17.0, 44.0, 49.5], "Europa": [-10, 35, 35, 65]}
+        ext = {"Deutschland": [5.8, 15.2, 47.2, 55.1], "Brandenburg/Berlin": [11.2, 14.8, 51.2, 53.6], "Mitteleuropa (DE, PL)": [4.0, 25.0, 45.0, 56.0], "Alpenraum": [5.5, 17.0, 44.0, 49.5], "Europa": [-12, 38, 34, 66]}
         ax.set_extent(ext[sel_region])
 
+        # KÜSTENLINIEN & GRENZEN FIX
+        ax.add_feature(cfeature.COASTLINE, linewidth=0.8, edgecolor='black', zorder=12)
         ax.add_feature(cfeature.BORDERS, linewidth=0.8, edgecolor='black', zorder=12)
         states = cfeature.NaturalEarthFeature(category='cultural', name='admin_1_states_provinces_lines', scale='10m', facecolor='none')
         ax.add_feature(states, linewidth=0.4, edgecolor='black', zorder=12)
 
-        # PLOTTING (shading='auto' für maximale Stabilität)
+        # PLOTTING
         if "Temperatur" in sel_param or "850 hPa" in sel_param:
             val = data - 273.15 if data.max() > 100 else data
             im = ax.pcolormesh(lons, lats, val, cmap=cmap_temp, norm=mcolors.Normalize(vmin=-25, vmax=45), shading='auto', zorder=5)
@@ -154,10 +157,7 @@ if generate:
             cs = ax.contour(ilons, ilats, p_hpa, colors='black', linewidths=0.7, levels=np.arange(940, 1060, 4), zorder=20)
             ax.clabel(cs, inline=True, fontsize=8, fmt='%1.0f')
 
-        for name, (lon, lat) in CITIES.items():
-            ax.plot(lon, lat, 'ko', markersize=3, zorder=25)
-            ax.text(lon + 0.05, lat + 0.05, name, fontsize=8, fontweight='bold', zorder=26, bbox=dict(facecolor='white', alpha=0.6, edgecolor='none', pad=0.2))
-
+        # Header Info
         valid = datetime.strptime(run_id, "%Y%m%d%H").replace(tzinfo=timezone.utc) + timedelta(hours=sel_hour)
         info = f"{sel_model} | {sel_param}\nTermin: {valid.strftime('%d.%m. %H:00')} UTC\nLauf: {run_id[-2:]}Z"
         ax.text(0.02, 0.98, info, transform=ax.transAxes, fontsize=10, fontweight='bold', va='top', bbox=dict(facecolor='white', alpha=0.8), zorder=30)
