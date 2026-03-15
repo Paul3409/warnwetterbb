@@ -1,1 +1,7 @@
 streamlit
+xarray
+cfgrib
+cartopy
+matplotlib
+requests
+numpy
