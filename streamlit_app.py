@@ -13,7 +13,6 @@ import numpy as np
 st.set_page_config(page_title="WarnwetterBB | Profi", layout="wide")
 
 # --- DEFINITION DER WETTER-CODES & FARBEN ---
-# Mapping nach DWD WW-Codes (Signifikantes Wetter)
 WW_LEGEND = {
     "Nebel": ("#FFFF00", range(40, 50)),
     "Regen leicht": ("#90EE90", [50, 51, 60, 80]),
@@ -36,14 +35,14 @@ with st.sidebar:
     sel_region = st.selectbox("Region", ["Deutschland", "Brandenburg/Berlin", "Europa"])
     sel_model = st.selectbox("Modell", ["ICON-D2 (DWD)"])
     sel_param = st.selectbox("Parameter", ["Signifikantes Wetter", "Windböen (km/h)"])
-    sel_hour = st.select_slider("Zeitschritt (Vorhersage +h)", options=[1, 3, 6, 12, 18, 24, 48], value=1)
+    # Geändert: Slider für 1h Schritte
+    sel_hour = st.slider("Zeitschritt (Vorhersage +h)", min_value=1, max_value=48, value=1, step=1)
     st.markdown("---")
     st.write("Die App prüft alle 30 Min. auf neue Daten.")
 
 # --- DATEN-DOWNLOAD LOGIK ---
 @st.cache_data(ttl=1800) # Cache wird alle 30 Min. ungültig
 def fetch_dwd_data(param_key, hr):
-    # ICON-D2 läuft alle 3h (00, 03, 06, 09, 12, 15, 18, 21 UTC)
     for offset in [3, 4, 6, 9]:
         now = datetime.now(timezone.utc) - timedelta(hours=offset)
         run_h = (now.hour // 3) * 3
@@ -71,11 +70,8 @@ if ds_cl and ds_main:
     # Berechnung des Vorhersagezeitpunkts
     valid_time = run_dt + timedelta(hours=sel_hour)
     
-    # Titel-Zusammenbau
-    title_text = f"{sel_region} | {sel_model} (Lauf: {run_dt.strftime('%d.%m. %H:00')} UTC) | {sel_param}\nVorhersage für: {valid_time.strftime('%d.%m.%Y %H:00')} UTC"
-    st.subheader(title_text)
-
-    fig, ax = plt.subplots(figsize=(10, 11), subplot_kw={'projection': ccrs.PlateCarree()})
+    # Geändert: Schmaleres figsize (7x9 statt 10x11)
+    fig, ax = plt.subplots(figsize=(7, 9), subplot_kw={'projection': ccrs.PlateCarree()})
     
     # Regionen-Zoom
     extents = {
@@ -85,15 +81,15 @@ if ds_cl and ds_main:
     }
     ax.set_extent(extents[sel_region])
     
-    # Hintergrund: Wolken
-    ax.pcolormesh(ds_cl.longitude, ds_cl.latitude, ds_cl[list(ds_cl.data_vars)[0]], cmap='Greys', alpha=0.3, shading='auto', zorder=2)
+    # Geändert: Wolken-alpha erhöht (0.6 statt 0.3)
+    ax.pcolormesh(ds_cl.longitude, ds_cl.latitude, ds_cl[list(ds_cl.data_vars)[0]], cmap='Greys', alpha=0.6, shading='auto', zorder=2)
     
     # Daten-Layer
     vals = ds_main[list(ds_main.data_vars)[0]].values
     if sel_param == "Windböen (km/h)":
         im = ax.pcolormesh(ds_main.longitude, ds_main.latitude, vals * 3.6, 
                            cmap=mcolors.ListedColormap(W_COLORS), 
-                           norm=mcolors.BoundaryNorm(W_LEVELS, ncolors=len(W_COLORS)), 
+                           norm=mcolors.BoundaryNorm(WIND_LEVELS, ncolors=len(W_COLORS)), 
                            alpha=0.7, shading='auto', zorder=5)
         plt.colorbar(im, label="km/h", shrink=0.6, pad=0.02)
     else:
@@ -108,12 +104,19 @@ if ds_cl and ds_main:
         ax.pcolormesh(ds_main.longitude, ds_main.latitude, c_grid, 
                       cmap=mcolors.ListedColormap(color_list), alpha=0.8, shading='auto', zorder=5)
         
-        # Legende hinzufügen
+        # Legende
         legend_patches = [mpatches.Patch(color=c, label=l) for l, (c, _) in WW_LEGEND.items()]
-        ax.legend(handles=legend_patches, loc='lower left', title="Sign. Wetter", fontsize='small', framealpha=0.8)
+        ax.legend(handles=legend_patches, loc='lower left', title="Sign. Wetter", fontsize='small', framealpha=0.8, zorder=12)
 
+    # Grenzen
     ax.add_feature(cfeature.BORDERS, linewidth=1, zorder=10)
     ax.add_feature(cfeature.COASTLINE, linewidth=1, zorder=10)
+
+    # Neu: Text-Infos direkt in der Karte
+    info_text = f"Region: {sel_region}\nDatum: {valid_time.strftime('%d.%m.%Y %H:00')} UTC\nModell: {sel_model} (Lauf: {run_dt.strftime('%H')}Z)"
+    ax.text(0.02, 0.98, info_text, transform=ax.transAxes, fontsize=10, 
+            verticalalignment='top', horizontalalignment='left',
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), zorder=15)
     
     st.pyplot(fig)
 else:
