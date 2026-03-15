@@ -36,32 +36,28 @@ temp_colors = [
 ]
 cmap_temp = mcolors.LinearSegmentedColormap.from_list("custom_temp", temp_colors)
 
-# Wind
 W_COLORS = ['#ADD8E6', '#0000FF', '#008000', '#FFFF00', '#FFD700', '#FFA500', '#FF0000', '#8B0000', '#800080', '#4B0082']
 cmap_wind = mcolors.LinearSegmentedColormap.from_list("wind", W_COLORS, N=256)
 
-# --- NEU: DEINE DETAILLIERTE WETTER-SKALA ---
-# Mapping der DWD/WMO Wettercodes auf deine exakten Farbwünsche
+# Deine detaillierte Wetter-Skala
 WW_LEGEND_DATA = {
-    "Nebel": ("#FFFF00", list(range(40, 50))),                       # gelb
-    "Regen leicht": ("#00FF00", [50, 51, 58, 60, 80]),               # grün
-    "Regen mäßig": ("#228B22", [53, 61, 62, 81]),                    # dunkleres grün (ForestGreen)
-    "Regen stark": ("#006400", [54, 55, 63, 64, 65, 82]),            # dunkelgrün
-    "gefr. Regen leicht": ("#FF7F7F", [56, 66]),                     # hellrot
-    "gefr. Regen mäßig/stark": ("#FF0000", [57, 67]),                # rot
-    "Schneeregen leicht": ("#FFB347", [68, 83]),                     # hellorange
-    "Schneeregen mäßig/stark": ("#FFA500", [69, 84]),                # orange
-    "Schnee leicht": ("#87CEEB", [70, 71, 85]),                      # himmelblau
-    "Schnee mäßig": ("#0000FF", [72, 73, 86]),                       # blau
-    "Schnee stark": ("#00008B", [74, 75, 76, 77, 78, 79, 87, 88]),   # dunkleres blau
-    "Gewitter leicht": ("#FF00FF", [95]),                            # magenta
-    "Gewitter mäßig/stark": ("#800080", [96, 97, 99])                # lila
+    "Nebel": ("#FFFF00", list(range(40, 50))),
+    "Regen leicht": ("#00FF00", [50, 51, 58, 60, 80]),
+    "Regen mäßig": ("#228B22", [53, 61, 62, 81]),
+    "Regen stark": ("#006400", [54, 55, 63, 64, 65, 82]),
+    "gefr. Regen leicht": ("#FF7F7F", [56, 66]),
+    "gefr. Regen mäßig/stark": ("#FF0000", [57, 67]),
+    "Schneeregen leicht": ("#FFB347", [68, 83]),
+    "Schneeregen mäßig/stark": ("#FFA500", [69, 84]),
+    "Schnee leicht": ("#87CEEB", [70, 71, 85]),
+    "Schnee mäßig": ("#0000FF", [72, 73, 86]),
+    "Schnee stark": ("#00008B", [74, 75, 76, 77, 78, 79, 87, 88]),
+    "Gewitter leicht": ("#FF00FF", [95]),
+    "Gewitter mäßig/stark": ("#800080", [96, 97, 99])
 }
-# Farbe für "Kein signifikantes Wetter" ist transparent (#FFFFFF00), danach folgen deine Farben
 cmap_ww = mcolors.ListedColormap(['#FFFFFF00'] + [c for l, (c, codes) in WW_LEGEND_DATA.items()])
 
-
-# --- 3. SIDEBAR (DYNAMISCH) ---
+# --- 3. SIDEBAR ---
 with st.sidebar:
     st.header("🛰️ Konfiguration")
     sel_model = st.selectbox("Modell", ["ICON-D2", "ICON-D2-RUC", "ICON-EU", "GFS (NOAA)", "ECMWF"])
@@ -71,6 +67,7 @@ with st.sidebar:
     if "ICON-D2" in sel_model: p_opts.append("Signifikantes Wetter")
     sel_param = st.selectbox("Parameter", p_opts)
     
+    # Dynamischer Slider
     max_h, step_h = 48, 1
     if "ICON-D2-RUC" in sel_model: max_h, step_h = 27, 1
     elif "ICON-EU" in sel_model: max_h, step_h = 120, 1
@@ -96,35 +93,27 @@ def fetch_any_model(model, param, hr):
         m_dir = "icon-d2-ruc" if is_ruc else ("icon-d2" if "D2" in model else "icon-eu")
         reg_str = "europe" if "icon-eu" in m_dir else "germany"
         step = 1 if is_ruc else 3
-        
         for off in range(1, 10):
             t = now - timedelta(hours=off)
             run = t.hour if is_ruc else (t.hour // 3) * 3
             dt_s = t.replace(hour=run, minute=0, second=0, microsecond=0).strftime("%Y%m%d%H")
-            
             l_type = "pressure-level" if key in ["fi", "t"] else "single-level"
             file_end = f"{'500' if '500' in param else '850'}_{key}" if l_type == "pressure-level" else f"2d_{key}"
-            
             url = f"https://opendata.dwd.de/weather/nwp/{m_dir}/grib/{run:02d}/{key}/{m_dir}_{reg_str}_regular-lat-lon_{l_type}_{dt_s}_{hr:03d}_{file_end}.grib2.bz2"
-            
             try:
                 r = requests.get(url, timeout=10)
                 if r.status_code == 200:
                     with bz2.open(io.BytesIO(r.content)) as f:
                         with open("temp.grib", "wb") as out: out.write(f.read())
                     ds = xr.open_dataset("temp.grib", engine='cfgrib')
-                    
                     var = list(ds.data_vars)[0]
                     ds_var = ds[var]
-                    
                     if 'isobaricInhPa' in ds_var.dims:
                         lvl_val = 500 if "500" in param else 850
                         data_flat = ds_var.sel(isobaricInhPa=lvl_val)
                     else: data_flat = ds_var
-                    
                     drop_dims = {d: 0 for d in ['step', 'height', 'time', 'valid_time', 'surface'] if d in data_flat.dims}
                     data = data_flat.isel(**drop_dims).values.squeeze()
-                    
                     lons, lats = ds.longitude.values, ds.latitude.values
                     if lons.ndim == 1: lons, lats = np.meshgrid(lons, lats)
                     return data, lons, lats, dt_s
@@ -143,15 +132,12 @@ def fetch_any_model(model, param, hr):
                     ds = xr.open_dataset("temp_gfs.grib", engine='cfgrib')
                     var = list(ds.data_vars)[0]
                     ds_var = ds[var]
-                    
                     if 'isobaricInhPa' in ds_var.dims:
                         lvl_val = 500 if "500" in param else 850
                         data_flat = ds_var.sel(isobaricInhPa=lvl_val)
                     else: data_flat = ds_var
-                    
                     drop_dims = {d: 0 for d in ['step', 'height', 'time', 'valid_time', 'meanSea'] if d in data_flat.dims}
                     data = data_flat.isel(**drop_dims).values.squeeze()
-                    
                     lons, lats = ds.longitude.values, ds.latitude.values
                     if lons.ndim == 1: lons, lats = np.meshgrid(lons, lats)
                     return data, lons, lats, f"{dt_s}{run:02d}"
@@ -172,25 +158,21 @@ def fetch_any_model(model, param, hr):
                     ds = xr.open_dataset("temp_ecmwf.grib", engine='cfgrib', filter_by_keys={'shortName': e_key})
                     var = list(ds.data_vars)[0]
                     ds_var = ds[var]
-                    
                     if 'isobaricInhPa' in ds_var.dims:
                         lvl_val = 500 if "500" in param else 850
                         data_flat = ds_var.sel(isobaricInhPa=lvl_val)
                     else: data_flat = ds_var
-                    
                     drop_dims = {d: 0 for d in ['step', 'height', 'time', 'valid_time', 'surface', 'meanSea'] if d in data_flat.dims}
                     data = data_flat.isel(**drop_dims).values.squeeze()
-                    
                     lons, lats = ds.longitude.values, ds.latitude.values
                     if lons.ndim == 1: lons, lats = np.meshgrid(lons, lats)
                     return data, lons, lats, f"{dt_s}{run:02d}"
             except: continue
-
     return None, None, None, None
 
-# --- 5. KARTEN-GENERIERUNG ---
+# --- 5. HAUPTTEIL ---
 if generate:
-    with st.spinner(f"📡 Lade Daten für {sel_model}..."):
+    with st.spinner(f"📡 Lade Daten..."):
         data, lons, lats, run_id = fetch_any_model(sel_model, sel_param, sel_hour)
         iso_data = None
         if show_isobars:
@@ -198,57 +180,46 @@ if generate:
 
     if data is not None:
         fig, ax = plt.subplots(figsize=(8, 10), subplot_kw={'projection': ccrs.PlateCarree()}, dpi=120)
-        
         ext = {"Deutschland": [5.8, 15.2, 47.2, 55.1], "Brandenburg/Berlin": [11.2, 14.8, 51.2, 53.6], "Mitteleuropa (DE, PL)": [4.0, 25.0, 45.0, 56.0], "Alpenraum": [5.5, 17.0, 44.0, 49.5], "Europa": [-12, 40, 34, 66]}
         ax.set_extent(ext[sel_region])
 
+        # --- BUNDESLÄNDER & GRENZEN ---
         ax.add_feature(cfeature.COASTLINE, linewidth=0.8, edgecolor='black', zorder=12)
         ax.add_feature(cfeature.BORDERS, linewidth=0.8, edgecolor='black', zorder=12)
+        states = cfeature.NaturalEarthFeature(category='cultural', name='admin_1_states_provinces_lines', scale='10m', facecolor='none')
+        ax.add_feature(states, linewidth=0.5, edgecolor='black', zorder=12)
 
-        # PLOTTING LOGIK
+        # Plotting Logik
         if "Temperatur" in sel_param or "850 hPa Temp." in sel_param:
             val_c = data - 273.15 if data.max() > 100 else data
             im = ax.pcolormesh(lons, lats, val_c, cmap=cmap_temp, norm=mcolors.Normalize(vmin=-30, vmax=30), shading='auto', zorder=5)
             plt.colorbar(im, label="°C", shrink=0.4, pad=0.02, ticks=np.arange(-30, 31, 10))
-
         elif "Geopot" in sel_param:
             val = (data / 9.80665) / 10 if data.max() > 10000 else data / 10
             im = ax.pcolormesh(lons, lats, val, cmap='nipy_spectral', shading='auto', zorder=5)
             plt.colorbar(im, label="gpdm", shrink=0.4)
-            
         elif "Windböen" in sel_param:
             im = ax.pcolormesh(lons, lats, data * 3.6, cmap=cmap_wind, norm=mcolors.Normalize(vmin=0, vmax=150), shading='auto', zorder=5)
             plt.colorbar(im, label="km/h", shrink=0.4, pad=0.02)
-            
         elif "Signifikantes Wetter" in sel_param:
-            # MATRIX FÜR DAS WETTER BAUEN (Ordnet die DWD Codes deinen Farben zu)
             grid = np.zeros_like(data)
             for i, (l, (c, codes)) in enumerate(WW_LEGEND_DATA.items(), 1):
-                for code in codes:
-                    grid[data == code] = i
-                    
-            # shading='nearest' sorgt dafür, dass die Wetter-Blöcke scharfkantig bleiben (kein Verwischen)
+                for code in codes: grid[data == code] = i
             ax.pcolormesh(lons, lats, grid, cmap=cmap_ww, shading='nearest', zorder=5)
-            
-            # Legende extrem kompakt generieren, damit sie nicht die Karte verdeckt
             patches = [mpatches.Patch(color=c, label=l) for l, (c, _) in WW_LEGEND_DATA.items()]
-            leg = ax.legend(handles=patches, loc='lower left', title="Signifikantes Wetter", fontsize='6', title_fontsize='7', framealpha=0.9)
+            leg = ax.legend(handles=patches, loc='lower left', title="Wetter", fontsize='6', title_fontsize='7', framealpha=0.9)
             leg.set_zorder(25)
 
-        # ISOBAREN LAYER
         if iso_data is not None:
             p_hpa = iso_data / 100 if iso_data.max() > 5000 else iso_data
             if ilons.ndim == 1: ilons, ilats = np.meshgrid(ilons, ilats)
             cs = ax.contour(ilons, ilats, p_hpa, colors='black', linewidths=0.7, levels=np.arange(940, 1060, 4), zorder=20)
             ax.clabel(cs, inline=True, fontsize=8, fmt='%1.0f')
 
-        # HEADER INFO
+        # Header
         valid = datetime.strptime(run_id, "%Y%m%d%H").replace(tzinfo=timezone.utc) + timedelta(hours=sel_hour)
         info = f"{sel_model} | {sel_param}\nTermin: {valid.strftime('%d.%m. %H:00')} UTC\nLauf: {run_id[-2:]}Z"
         ax.text(0.02, 0.98, info, transform=ax.transAxes, fontsize=8, fontweight='bold', va='top', bbox=dict(facecolor='white', alpha=0.6, boxstyle='round,pad=0.2', edgecolor='none'), zorder=30)
-
         st.pyplot(fig)
-    else:
-        st.error(f"Modell {sel_model} ist für diesen Zeitschritt (+{sel_hour}h) gerade nicht erreichbar. Versuche eine andere Stunde oder ein anderes Modell.")
 else:
-    st.info("Einstellungen wählen und auf 'Karte generieren' klicken.")
+    st.info("🚀 Konfiguration wählen und Starten.")
