@@ -13,6 +13,7 @@ import numpy as np
 st.set_page_config(page_title="WarnwetterBB | Analyse-Zentrum", layout="wide")
 
 # --- 2. FARBSKALEN ---
+# Temperatur (Deine schlagartige 10er Skala)
 temp_colors = [
     (0.0, '#D3D3D3'),       # -30: hellgrau
     (5/60, '#FFFFFF'),      # -25: weiß
@@ -35,26 +36,32 @@ temp_colors = [
 ]
 cmap_temp = mcolors.LinearSegmentedColormap.from_list("custom_temp", temp_colors)
 
+# Wind
 W_COLORS = ['#ADD8E6', '#0000FF', '#008000', '#FFFF00', '#FFD700', '#FFA500', '#FF0000', '#8B0000', '#800080', '#4B0082']
 cmap_wind = mcolors.LinearSegmentedColormap.from_list("wind", W_COLORS, N=256)
 
-# Wetter-Codes für DWD (ww)
+# --- NEU: DEINE DETAILLIERTE WETTER-SKALA ---
+# Mapping der DWD/WMO Wettercodes auf deine exakten Farbwünsche
 WW_LEGEND_DATA = {
-    "Nebel": ("#FFFF00", range(40, 50)),
-    "Regen leicht": ("#90EE90", [50, 51, 60, 80]),
-    "Regen mäßig": ("#00FF00", [53, 61, 81]),
-    "Regen stark": ("#006400", [55, 63, 65, 82]),
-    "Schneeregen": ("#FFA500", [68, 69, 83, 84]),
-    "Schnee leicht": ("#ADD8E6", [70, 71, 85]),
-    "Schnee mäßig": ("#0000FF", [73, 86]),
-    "Schnee stark": ("#00008B", [75, 87]),
-    "gefr. Regen": ("#FF0000", [66, 67]),
-    "Gewitter": ("#800080", [95, 96, 97, 99])
+    "Nebel": ("#FFFF00", list(range(40, 50))),                       # gelb
+    "Regen leicht": ("#00FF00", [50, 51, 58, 60, 80]),               # grün
+    "Regen mäßig": ("#228B22", [53, 61, 62, 81]),                    # dunkleres grün (ForestGreen)
+    "Regen stark": ("#006400", [54, 55, 63, 64, 65, 82]),            # dunkelgrün
+    "gefr. Regen leicht": ("#FF7F7F", [56, 66]),                     # hellrot
+    "gefr. Regen mäßig/stark": ("#FF0000", [57, 67]),                # rot
+    "Schneeregen leicht": ("#FFB347", [68, 83]),                     # hellorange
+    "Schneeregen mäßig/stark": ("#FFA500", [69, 84]),                # orange
+    "Schnee leicht": ("#87CEEB", [70, 71, 85]),                      # himmelblau
+    "Schnee mäßig": ("#0000FF", [72, 73, 86]),                       # blau
+    "Schnee stark": ("#00008B", [74, 75, 76, 77, 78, 79, 87, 88]),   # dunkleres blau
+    "Gewitter leicht": ("#FF00FF", [95]),                            # magenta
+    "Gewitter mäßig/stark": ("#800080", [96, 97, 99])                # lila
 }
-# Eine Farbe für "Nichts" (transparent), dann die Wetter-Farben
-cmap_ww = mcolors.ListedColormap(['#FFFFFF00'] + [c for c, _ in WW_LEGEND_DATA.values()])
+# Farbe für "Kein signifikantes Wetter" ist transparent (#FFFFFF00), danach folgen deine Farben
+cmap_ww = mcolors.ListedColormap(['#FFFFFF00'] + [c for l, (c, codes) in WW_LEGEND_DATA.items()])
 
-# --- 3. SIDEBAR ---
+
+# --- 3. SIDEBAR (DYNAMISCH) ---
 with st.sidebar:
     st.header("🛰️ Konfiguration")
     sel_model = st.selectbox("Modell", ["ICON-D2", "ICON-D2-RUC", "ICON-EU", "GFS (NOAA)", "ECMWF"])
@@ -214,16 +221,18 @@ if generate:
             plt.colorbar(im, label="km/h", shrink=0.4, pad=0.02)
             
         elif "Signifikantes Wetter" in sel_param:
-            # WICHTIG: Hier fehlte der Plotting-Code!
+            # MATRIX FÜR DAS WETTER BAUEN (Ordnet die DWD Codes deinen Farben zu)
             grid = np.zeros_like(data)
             for i, (l, (c, codes)) in enumerate(WW_LEGEND_DATA.items(), 1):
-                for code in codes: grid[data == code] = i
-                
+                for code in codes:
+                    grid[data == code] = i
+                    
+            # shading='nearest' sorgt dafür, dass die Wetter-Blöcke scharfkantig bleiben (kein Verwischen)
             ax.pcolormesh(lons, lats, grid, cmap=cmap_ww, shading='nearest', zorder=5)
             
-            # Echte Legende aufbauen
+            # Legende extrem kompakt generieren, damit sie nicht die Karte verdeckt
             patches = [mpatches.Patch(color=c, label=l) for l, (c, _) in WW_LEGEND_DATA.items()]
-            leg = ax.legend(handles=patches, loc='lower left', title="Wetter", fontsize='xx-small', framealpha=0.8)
+            leg = ax.legend(handles=patches, loc='lower left', title="Signifikantes Wetter", fontsize='6', title_fontsize='7', framealpha=0.9)
             leg.set_zorder(25)
 
         # ISOBAREN LAYER
