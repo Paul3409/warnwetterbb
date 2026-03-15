@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 
 # --- 1. SETUP ---
-st.set_page_config(page_title="WarnwetterBB | KI-Zentrale", layout="wide")
+st.set_page_config(page_title="WarnwetterBB | KI-Ensemble", layout="wide")
 
 # --- 2. FARBSKALEN ---
 # Deine schlagartige 10er-Temperatur-Skala
@@ -51,12 +51,10 @@ with st.sidebar:
     sel_region = st.selectbox("Region", ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"])
     
     p_opts = ["Temperatur 2m (°C)", "Windböen (km/h)", "500 hPa Geopot. Höhe", "850 hPa Temp."]
-    # Signifikantes Wetter nur für ICON und dein KI-Modell
     if "ICON" in sel_model or "WarnwetterBB" in sel_model:
         p_opts.append("Signifikantes Wetter")
     sel_param = st.selectbox("Parameter", p_opts)
     
-    # Dynamische Zeitleiste
     max_h, step_h = 48, 1
     if "RUC" in sel_model: max_h = 27
     elif "EU" in sel_model or "GFS" in sel_model: max_h = 120
@@ -67,97 +65,89 @@ with st.sidebar:
     st.markdown("---")
     generate = st.button("🚀 Karte generieren", use_container_width=True)
 
-# --- 4. DATA-ENGINE (DOWNLOAD & ENSEMBLE) ---
+# --- 4. DATA-ENGINE ---
 @st.cache_data(ttl=600)
 def fetch_any_model(model, param, hr):
     p_map = {"Temperatur 2m (°C)": "t_2m", "Windböen (km/h)": "vmax_10m", "500 hPa Geopot. Höhe": "fi", "850 hPa Temp.": "t", "Signifikantes Wetter": "ww", "Isobaren": "pmsl"}
     key = p_map[param]
     now = datetime.now(timezone.utc)
-    headers = {'User-Agent': 'Mozilla/5.0'}
-
-    def get_icon_url(m_name, run_h, dt_str, lead_h, p_key):
+    
+    # Helfer für DWD-Downloads
+    def dl_icon(m_name, run_h, dt_str, lead_h, p_key):
         reg = "europe" if "eu" in m_name else "germany"
         l_type = "pressure-level" if p_key in ["fi", "t"] else "single-level"
         f_end = f"{'500' if '500' in param else '850'}_{p_key}" if l_type == "pressure-level" else f"2d_{p_key}"
-        return f"https://opendata.dwd.de/weather/nwp/{m_name}/grib/{run_h:02d}/{p_key}/{m_name}_{reg}_regular-lat-lon_{l_type}_{dt_str}_{lead_h:03d}_{f_end}.grib2.bz2"
+        url = f"https://opendata.dwd.de/weather/nwp/{m_name}/grib/{run_h:02d}/{p_key}/{m_name}_{reg}_regular-lat-lon_{l_type}_{dt_str}_{lead_h:03d}_{f_end}.grib2.bz2"
+        try:
+            r = requests.get(url, timeout=7)
+            if r.status_code == 200:
+                with bz2.open(io.BytesIO(r.content)) as f:
+                    ds = xr.open_dataset(f, engine='cfgrib')
+                    v = list(ds.data_vars)[0]
+                    return ds[v].isel(step=0, height=0, isobaricInhPa=0, missing_dims='ignore').values.squeeze(), ds.longitude.values, ds.latitude.values, dt_str
+        except: return None, None, None, None
+        return None, None, None, None
 
-    # --- A: DEIN KI-ENSEMBLE MODELL ---
+    # --- ENSEMBLE LOGIK (WarnwetterBB-KI) ---
     if "WarnwetterBB" in model:
-        all_data = []
+        all_runs = []
         lons, lats, run_id = None, None, None
+        target_dt = now + timedelta(hours=hr)
         found, off = 0, 1
-        # Wir suchen die letzten 4 ICON-D2 Läufe (alle 3h)
-        while found < 4 and off < 18:
-            t = now - timedelta(hours=off)
-            run = (t.hour // 3) * 3
-            dt_s = t.replace(hour=run, minute=0, second=0, microsecond=0).strftime("%Y%m%d%H")
-            
-            # Berechne Lead-Time, damit alle auf den gleichen Punkt schauen
-            lead = hr + (now.hour - t.hour) + (t.minute // 60)
-            if lead < 1: lead = hr
-            
-            url = get_icon_url("icon-d2", run, dt_s, lead, key)
-            try:
-                r = requests.get(url, timeout=5)
-                if r.status_code == 200:
-                    with bz2.open(io.BytesIO(r.content)) as f:
-                        ds = xr.open_dataset(f, engine='cfgrib')
-                        var = list(ds.data_vars)[0]
-                        d = ds[var].isel(step=0, height=0, isobaricInhPa=0, missing_dims='ignore').values.squeeze()
-                        all_data.append(d)
-                        if found == 0:
-                            run_id = dt_s
-                            lons, lats = ds.longitude.values, ds.latitude.values
-                        found += 1
-            except: pass
-            off += 1
         
-        if len(all_data) == 4:
-            avg = np.mean(all_data, axis=0)
-            # KI-Trend: (Latest - Average) * 0.25 Korrektur
-            latest = all_data[0]
-            final = avg + (latest - avg) * 0.25
+        while found < 4 and off < 20:
+            t_check = now - timedelta(hours=off)
+            run = (t_check.hour // 3) * 3
+            dt_s = t_check.replace(hour=run, minute=0, second=0, microsecond=0).strftime("%Y%m%d%H")
+            
+            # Lead-Time exakt berechnen
+            run_dt = datetime.strptime(dt_s, "%Y%m%d%H").replace(tzinfo=timezone.utc)
+            lead = int((target_dt - run_dt).total_seconds() // 3600)
+            
+            if lead > 0:
+                d, lo, la, rid = dl_icon("icon-d2", run, dt_s, lead, key)
+                if d is not None:
+                    all_runs.append(d)
+                    if found == 0: lons, lats, run_id = lo, la, rid
+                    found += 1
+            off += 1
+            
+        if len(all_runs) == 4:
+            avg = np.mean(all_runs, axis=0)
+            final = avg + (all_runs[0] - avg) * 0.25 # Deine KI-Trend-Formel
             if lons.ndim == 1: lons, lats = np.meshgrid(lons, lats)
             return final, lons, lats, run_id
+        return None, None, None, None
 
-    # --- B: STANDARD MODELLE ---
-    elif "ICON" in model:
+    # --- STANDARD MODELLE ---
+    if "ICON" in model:
         is_ruc = "RUC" in model
-        m_dir = "icon-d2-ruc" if is_ruc else ("icon-d2" if "D2" in model else "icon-eu")
+        m_path = "icon-d2-ruc" if is_ruc else ("icon-d2" if "D2" in model else "icon-eu")
         step = 1 if is_ruc else 3
-        for off in range(1, 12):
-            t = now - timedelta(hours=off)
-            run = t.hour if is_ruc else (t.hour // 3) * 3
-            dt_s = t.replace(hour=run, minute=0, second=0, microsecond=0).strftime("%Y%m%d%H")
-            url = get_icon_url(m_dir, run, dt_s, hr, key)
-            try:
-                r = requests.get(url, timeout=10)
-                if r.status_code == 200:
-                    with bz2.open(io.BytesIO(r.content)) as f:
-                        ds = xr.open_dataset(f, engine='cfgrib')
-                        var = list(ds.data_vars)[0]
-                        data = ds[var].isel(step=0, height=0, isobaricInhPa=0, missing_dims='ignore').values.squeeze()
-                        lons, lats = ds.longitude.values, ds.latitude.values
-                        if lons.ndim == 1: lons, lats = np.meshgrid(lons, lats)
-                        return data, lons, lats, dt_s
-            except: continue
-
+        for o in range(1, 15):
+            t = now - timedelta(hours=o)
+            r = t.hour if is_ruc else (t.hour // 3) * 3
+            dt_s = t.replace(hour=r, minute=0, second=0, microsecond=0).strftime("%Y%m%d%H")
+            d, lo, la, rid = dl_icon(m_path, r, dt_s, hr, key)
+            if d is not None:
+                if lo.ndim == 1: lo, la = np.meshgrid(lo, la)
+                return d, lo, la, rid
+                
     elif "GFS" in model:
-        # GFS Filter Logik (Nur den benötigten Parameter laden)
-        g_f = f"&var_{'TMP' if 'Temp' in param else 'HGT' if 'Geopot' in param else 'GUST' if 'Wind' in param else 'PRMSL'}=on"
-        l_f = f"&lev_{'2_m_above_ground' if '2m' in param else '850_mb' if '850' in param else '500_mb' if '500' in param else 'surface' if 'Wind' in param else 'mean_sea_level'}=on"
         for off in [3, 6, 9, 12]:
             t = now - timedelta(hours=off)
             run = (t.hour // 6) * 6
             dt_s = t.strftime("%Y%m%d")
+            g_f = f"&var_{'TMP' if 'Temp' in param else 'HGT' if 'Geopot' in param else 'GUST' if 'Wind' in param else 'PRMSL'}=on"
+            l_f = f"&lev_{'2_m_above_ground' if '2m' in param else '850_mb' if '850' in param else '500_mb' if '500' in param else 'surface' if 'Wind' in param else 'mean_sea_level'}=on"
             url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?file=gfs.t{run:02d}z.pgrb2.0p25.f{hr:03d}{g_f}{l_f}&subregion=&leftlon=-20&rightlon=45&toplat=75&bottomlat=30&dir=%2Fgfs.{dt_s}%2F{run:02d}%2Fatmos"
             try:
                 r = requests.get(url, timeout=15)
                 if r.status_code == 200:
                     ds = xr.open_dataset(io.BytesIO(r.content), engine='cfgrib')
-                    data = ds[list(ds.data_vars)[0]].isel(step=0, height=0, isobaricInhPa=0, missing_dims='ignore').values.squeeze()
-                    lons, lats = np.meshgrid(ds.longitude.values, ds.latitude.values)
-                    return data, lons, lats, f"{dt_s}{run:02d}"
+                    d = ds[list(ds.data_vars)[0]].isel(step=0, height=0, isobaricInhPa=0, missing_dims='ignore').values.squeeze()
+                    lo, la = np.meshgrid(ds.longitude.values, ds.latitude.values)
+                    return d, lo, la, f"{dt_s}{run:02d}"
             except: continue
 
     elif "ECMWF" in model:
@@ -170,10 +160,10 @@ def fetch_any_model(model, param, hr):
                 r = requests.get(url, timeout=25)
                 if r.status_code == 200:
                     e_k = {"t_2m":"2t", "vmax_10m":"10fg", "fi":"z", "t":"t", "pmsl":"msl"}
-                    ds = xr.open_dataset(io.BytesIO(r.content), engine='cfgrib', filter_by_keys={'shortName': e_k.get(key, "2t")})
-                    data = ds[list(ds.data_vars)[0]].isel(step=0, height=0, isobaricInhPa=0, missing_dims='ignore').values.squeeze()
-                    lons, lats = np.meshgrid(ds.longitude.values, ds.latitude.values)
-                    return data, lons, lats, f"{dt_s}{run:02d}"
+                    ds = xr.open_dataset(io.BytesIO(r.content), engine='cfgrib', filter_by_keys={'shortName': e_keys.get(key, "2t")})
+                    d = ds[list(ds.data_vars)[0]].isel(step=0, height=0, isobaricInhPa=0, missing_dims='ignore').values.squeeze()
+                    lo, la = np.meshgrid(ds.longitude.values, ds.latitude.values)
+                    return d, lo, la, f"{dt_s}{run:02d}"
             except: continue
     return None, None, None, None
 
@@ -188,19 +178,17 @@ if generate:
         ext = {"Deutschland": [5.8, 15.2, 47.2, 55.1], "Brandenburg/Berlin": [11.2, 14.8, 51.2, 53.6], "Mitteleuropa (DE, PL)": [4.0, 25.0, 45.0, 56.0], "Alpenraum": [5.5, 17.0, 44.0, 49.5], "Europa": [-12, 40, 34, 66]}
         ax.set_extent(ext[sel_region])
 
-        # Grenzen (Scharf)
         ax.add_feature(cfeature.COASTLINE, linewidth=0.8, edgecolor='black', zorder=12)
         ax.add_feature(cfeature.BORDERS, linewidth=0.8, edgecolor='black', zorder=12)
         states = cfeature.NaturalEarthFeature(category='cultural', name='admin_1_states_provinces_lines', scale='10m', facecolor='none')
         ax.add_feature(states, linewidth=0.5, edgecolor='black', zorder=12)
 
-        # Plotting Logik
         if "Temperatur" in sel_param or "850 hPa Temp." in sel_param:
             val_c = data - 273.15 if data.max() > 100 else data
             im = ax.pcolormesh(lons, lats, val_c, cmap=cmap_temp, norm=mcolors.Normalize(vmin=-30, vmax=30), shading='auto', zorder=5)
             plt.colorbar(im, label="°C", shrink=0.4, pad=0.02, ticks=np.arange(-30, 31, 10))
         elif "Geopot" in sel_param:
-            val = (data / 9.80665) / 10 if data.max() > 10000 else data / 10
+            val = (data / 9.81) / 10 if data.max() > 1000 else data / 10
             im = ax.pcolormesh(lons, lats, val, cmap='nipy_spectral', shading='auto', zorder=5)
             plt.colorbar(im, label="gpdm", shrink=0.4)
         elif "Windböen" in sel_param:
@@ -209,26 +197,22 @@ if generate:
         elif "Signifikantes Wetter" in sel_param:
             grid = np.zeros_like(data)
             for i, (l, (c, codes)) in enumerate(WW_LEGEND_DATA.items(), 1):
-                # Wir nutzen np.isclose, da dein KI-Modell Kommastellen beim Mitteln erzeugt
                 for code in codes: grid[np.isclose(data, code, atol=0.4)] = i
             ax.pcolormesh(lons, lats, grid, cmap=cmap_ww, shading='nearest', zorder=5)
             patches = [mpatches.Patch(color=c, label=l) for l, (c, _) in WW_LEGEND_DATA.items()]
             leg = ax.legend(handles=patches, loc='lower left', title="Wetter", fontsize='6', title_fontsize='7', framealpha=0.9)
             leg.set_zorder(25)
 
-        # Isobaren
         if iso_data is not None:
             p_hpa = iso_data / 100 if iso_data.max() > 5000 else iso_data
             if ilons.ndim == 1: ilons, ilats = np.meshgrid(ilons, ilats)
             cs = ax.contour(ilons, ilats, p_hpa, colors='black', linewidths=0.7, levels=np.arange(940, 1060, 4), zorder=20)
             ax.clabel(cs, inline=True, fontsize=8, fmt='%1.0f')
 
-        # Header (Minimalistisch)
-        v = datetime.strptime(run_id, "%Y%m%d%H").replace(tzinfo=timezone.utc) + timedelta(hours=sel_hour)
-        info = f"{sel_model} | {sel_param}\nTermin: {v.strftime('%d.%m. %H:00')} UTC\nLauf: {run_id[-2:]}Z"
+        info = f"{sel_model} | {sel_param}\nTermin: {(datetime.strptime(run_id, '%Y%m%d%H').replace(tzinfo=timezone.utc) + timedelta(hours=sel_hour)).strftime('%d.%m. %H:00')} UTC\nLauf: {run_id[-2:]}Z"
         ax.text(0.02, 0.98, info, transform=ax.transAxes, fontsize=7, fontweight='bold', va='top', bbox=dict(facecolor='white', alpha=0.6, boxstyle='round,pad=0.2', edgecolor='none'), zorder=30)
         st.pyplot(fig)
     else:
-        st.error(f"Daten aktuell nicht verfügbar. Bitte Modell oder Zeit ändern.")
+        st.error(f"Daten für {sel_model} konnten nicht kombiniert werden. Versuche es in 5 Min noch einmal.")
 else:
     st.info("🚀 Konfiguration wählen und Starten.")
