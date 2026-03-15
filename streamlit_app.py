@@ -3,73 +3,119 @@ import xarray as xr
 import requests, bz2, os
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import matplotlib.patches as mpatches
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from datetime import datetime, timedelta, timezone
 import numpy as np
 
-st.set_page_config(page_title="WarnwetterBB | Live", layout="wide")
-st.title("🛰️ WarnwetterBB | ICON-D2 Profi-Check")
+# --- SEITEN-KONFIGURATION ---
+st.set_page_config(page_title="WarnwetterBB | Profi", layout="wide")
 
-# --- FARBEN ---
-def get_ww_cmap():
-    cols = ['#FFFFFF00', '#FFFF00', '#90EE90', '#00FF00', '#006400', '#FFA500', '#ADD8E6', '#0000FF', '#00008B', '#FF0000', '#8B0000', '#FF00FF', '#800080']
-    return mcolors.ListedColormap(cols)
+# --- DEFINITION DER WETTER-CODES & FARBEN ---
+# Mapping nach DWD WW-Codes (Signifikantes Wetter)
+WW_LEGEND = {
+    "Nebel": ("#FFFF00", range(40, 50)),
+    "Regen leicht": ("#90EE90", [50, 51, 60, 80]),
+    "Regen mäßig": ("#00FF00", [53, 61, 81]),
+    "Regen stark": ("#006400", [55, 63, 65, 82]),
+    "Schneeregen": ("#FFA500", [68, 69, 83, 84]),
+    "Schnee leicht": ("#ADD8E6", [70, 71, 85]),
+    "Schnee mäßig": ("#0000FF", [73, 86]),
+    "Schnee stark": ("#00008B", [75, 87]),
+    "gefr. Regen": ("#FF0000", [66, 67]),
+    "Gewitter": ("#800080", [95, 96, 97, 99])
+}
 
-W_LEVELS = [0, 10, 20, 30, 40, 50, 75, 100, 125, 150]
-W_COLORS = ['#ADD8E6', '#0000FF', '#008000', '#FFFF00', '#FFD700', '#FFA500', '#FF0000', '#8B0000', '#800080', '#4B0082']
+WIND_LEVELS = [0, 10, 20, 30, 40, 50, 75, 100, 125, 150]
+WIND_COLORS = ['#ADD8E6', '#0000FF', '#008000', '#FFFF00', '#FFD700', '#FFA500', '#FF0000', '#8B0000', '#800080', '#4B0082']
 
-# --- SIDEBAR ---
+# --- AUSWAHLMENÜ (SIDEBAR) ---
 with st.sidebar:
-    st.header("⚙️ Menü")
-    mode = st.radio("Was willst du sehen?", ["Sign. Wetter", "Windböen (km/h)"])
-    hr = st.select_slider("Vorhersagezeit (+h):", options=[1, 3, 6, 12, 24, 48], value=1)
+    st.header("🔍 Steuerung")
+    sel_region = st.selectbox("Region", ["Deutschland", "Brandenburg/Berlin", "Europa"])
+    sel_model = st.selectbox("Modell", ["ICON-D2 (DWD)"])
+    sel_param = st.selectbox("Parameter", ["Signifikantes Wetter", "Windböen (km/h)"])
+    sel_hour = st.select_slider("Zeitschritt (Vorhersage +h)", options=[1, 3, 6, 12, 18, 24, 48], value=1)
+    st.markdown("---")
+    st.write("Die App prüft alle 30 Min. auf neue Daten.")
 
-# --- DATEN-DOWNLOAD ---
-@st.cache_data(ttl=1800)
-def fetch(p_key, h):
-    for offset in [3, 4, 6]:
+# --- DATEN-DOWNLOAD LOGIK ---
+@st.cache_data(ttl=1800) # Cache wird alle 30 Min. ungültig
+def fetch_dwd_data(param_key, hr):
+    # ICON-D2 läuft alle 3h (00, 03, 06, 09, 12, 15, 18, 21 UTC)
+    for offset in [3, 4, 6, 9]:
         now = datetime.now(timezone.utc) - timedelta(hours=offset)
-        run = (now.hour // 3) * 3
-        dt_str = now.replace(hour=run, minute=0, second=0).strftime("%Y%m%d%H")
-        url = f"https://opendata.dwd.de/weather/nwp/icon-d2/grib/{run:02d}/{p_key}/icon-d2_germany_regular-lat-lon_single-level_{dt_str}_{h:03d}_2d_{p_key}.grib2.bz2"
-        r = requests.get(url, stream=True)
-        if r.status_code == 200:
-            with bz2.open(r.raw) as f_in, open(f"{p_key}.grib", "wb") as f_out:
-                f_out.write(f_in.read())
-            return xr.open_dataset(f"{p_key}.grib", engine='cfgrib'), dt_str
+        run_h = (now.hour // 3) * 3
+        dt_obj = now.replace(hour=run_h, minute=0, second=0, microsecond=0)
+        dt_str = dt_obj.strftime("%Y%m%d%H")
+        
+        url = f"https://opendata.dwd.de/weather/nwp/icon-d2/grib/{run_h:02d}/{param_key}/icon-d2_germany_regular-lat-lon_single-level_{dt_str}_{hr:03d}_2d_{param_key}.grib2.bz2"
+        
+        try:
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200:
+                with bz2.open(requests.get(url, stream=True).raw) as f_in:
+                    with open(f"{param_key}.grib", "wb") as f_out: f_out.write(f_in.read())
+                ds = xr.open_dataset(f"{param_key}.grib", engine='cfgrib')
+                return ds, dt_obj
+        except: continue
     return None, None
 
-# --- KARTE ---
-ds_cl, run_id = fetch("clct", hr) # Wolken
-p_map = {"Sign. Wetter": "ww", "Windböen (km/h)": "vmax_10m"}
-ds_main, _ = fetch(p_map[mode], hr)
+# --- HAUPTTEIL ---
+p_map = {"Signifikantes Wetter": "ww", "Windböen (km/h)": "vmax_10m"}
+ds_cl, run_dt = fetch_dwd_data("clct", sel_hour) # Bewölkung im Hintergrund
+ds_main, _ = fetch_dwd_data(p_map[sel_param], sel_hour)
 
 if ds_cl and ds_main:
-    fig, ax = plt.subplots(figsize=(10, 10), subplot_kw={'projection': ccrs.PlateCarree()})
-    ax.set_extent([5.8, 15.2, 47.2, 55.1])
+    # Berechnung des Vorhersagezeitpunkts
+    valid_time = run_dt + timedelta(hours=sel_hour)
     
-    # 1. Schicht: Wolken
+    # Titel-Zusammenbau
+    title_text = f"{sel_region} | {sel_model} (Lauf: {run_dt.strftime('%d.%m. %H:00')} UTC) | {sel_param}\nVorhersage für: {valid_time.strftime('%d.%m.%Y %H:00')} UTC"
+    st.subheader(title_text)
+
+    fig, ax = plt.subplots(figsize=(10, 11), subplot_kw={'projection': ccrs.PlateCarree()})
+    
+    # Regionen-Zoom
+    extents = {
+        "Deutschland": [5.8, 15.2, 47.2, 55.1],
+        "Brandenburg/Berlin": [11.2, 14.8, 51.2, 53.6],
+        "Europa": [-10, 30, 35, 65]
+    }
+    ax.set_extent(extents[sel_region])
+    
+    # Hintergrund: Wolken
     ax.pcolormesh(ds_cl.longitude, ds_cl.latitude, ds_cl[list(ds_cl.data_vars)[0]], cmap='Greys', alpha=0.3, shading='auto', zorder=2)
     
-    # 2. Schicht: Hauptdaten
+    # Daten-Layer
     vals = ds_main[list(ds_main.data_vars)[0]].values
-    if mode == "Windböen (km/h)":
-        im = ax.pcolormesh(ds_main.longitude, ds_main.latitude, vals * 3.6, cmap=mcolors.ListedColormap(W_COLORS), norm=mcolors.BoundaryNorm(W_LEVELS, ncolors=len(W_COLORS)), alpha=0.7, shading='auto', zorder=5)
-        plt.colorbar(im, label="km/h", shrink=0.5)
+    if sel_param == "Windböen (km/h)":
+        im = ax.pcolormesh(ds_main.longitude, ds_main.latitude, vals * 3.6, 
+                           cmap=mcolors.ListedColormap(W_COLORS), 
+                           norm=mcolors.BoundaryNorm(W_LEVELS, ncolors=len(W_COLORS)), 
+                           alpha=0.7, shading='auto', zorder=5)
+        plt.colorbar(im, label="km/h", shrink=0.6, pad=0.02)
     else:
+        # Signifikantes Wetter Mapping
         c_grid = np.zeros_like(vals)
-        c_grid[(vals >= 40) & (vals <= 49)] = 1 # Nebel
-        c_grid[(vals == 60) | (vals == 50) | (vals == 80)] = 2 # R. leicht
-        c_grid[(vals == 61) | (vals == 81)] = 3 # R. mäßig
-        c_grid[(vals >= 62) & (vals <= 65)] = 4 # R. stark
-        c_grid[vals >= 95] = 11 # Gewitter
-        c_grid = np.ma.masked_where(c_grid == 0, c_grid)
-        ax.pcolormesh(ds_main.longitude, ds_main.latitude, c_grid, cmap=get_ww_cmap(), alpha=0.8, shading='auto', zorder=5)
+        color_list = ['#FFFFFF00']
+        for i, (label, (color, codes)) in enumerate(WW_LEGEND.items(), 1):
+            for code in codes:
+                c_grid[vals == code] = i
+            color_list.append(color)
+        
+        ax.pcolormesh(ds_main.longitude, ds_main.latitude, c_grid, 
+                      cmap=mcolors.ListedColormap(color_list), alpha=0.8, shading='auto', zorder=5)
+        
+        # Legende hinzufügen
+        legend_patches = [mpatches.Patch(color=c, label=l) for l, (c, _) in WW_LEGEND.items()]
+        ax.legend(handles=legend_patches, loc='lower left', title="Sign. Wetter", fontsize='small', framealpha=0.8)
 
     ax.add_feature(cfeature.BORDERS, linewidth=1, zorder=10)
     ax.add_feature(cfeature.COASTLINE, linewidth=1, zorder=10)
+    
     st.pyplot(fig)
-    st.success(f"Lauf: {run_id} UTC | Vorhersage: +{hr}h")
 else:
-    st.warning("Echtzeit-Daten werden geladen...")
+    st.info("🔄 Suche nach aktuellsten Wetterdaten vom DWD-Server...")
+
