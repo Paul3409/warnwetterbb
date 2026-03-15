@@ -13,33 +13,17 @@ import numpy as np
 st.set_page_config(page_title="WarnwetterBB | Analyse-Zentrum", layout="wide")
 
 # --- 2. FARBSKALEN ---
-# Temperatur (Deine schlagartige 10er Skala)
 temp_colors = [
-    (0.0, '#D3D3D3'),       # -30: hellgrau
-    (5/60, '#FFFFFF'),      # -25: weiß
-    (10/60, '#FFC0CB'),     # -20: rosa
-    (15/60, '#FF00FF'),     # -15: magenta
-    (20/60, '#800080'),     # -10: lila
-    (20.01/60, '#00008B'),  # SCHLAGARTIG zu dunkelblau
-    (21/60, '#00008B'),     # -9: dunkelblau
-    (25/60, '#0000CD'),     # -5: dunkles blau
-    (29.99/60, '#ADD8E6'),  # -0: hellblau
-    (30/60, '#006400'),     # +0: SCHLAGARTIG zu dunkelgrün
-    (35/60, '#008000'),     # +5: grün
-    (39/60, '#90EE90'),     # +9: hellgrün
-    (39.99/60, '#90EE90'),  # kurz vor 10: hellgrün
-    (40/60, '#FFFF00'),     # +10: SCHLAGARTIG zu gelb
-    (45/60, '#FFA500'),     # +15: orange
-    (50/60, '#FF0000'),     # +20: rot
-    (55/60, '#8B0000'),     # +25: dunkelrot
-    (60/60, '#800080')      # +30: lila
+    (0.0, '#D3D3D3'), (5/60, '#FFFFFF'), (10/60, '#FFC0CB'), (15/60, '#FF00FF'),
+    (20/60, '#800080'), (20.01/60, '#00008B'), (21/60, '#00008B'), (25/60, '#0000CD'),
+    (29.99/60, '#ADD8E6'), (30/60, '#006400'), (35/60, '#008000'), (39/60, '#90EE90'),
+    (39.99/60, '#90EE90'), (40/60, '#FFFF00'), (45/60, '#FFA500'), (50/60, '#FF0000'),
+    (55/60, '#8B0000'), (60/60, '#800080')
 ]
 cmap_temp = mcolors.LinearSegmentedColormap.from_list("custom_temp", temp_colors)
-
 W_COLORS = ['#ADD8E6', '#0000FF', '#008000', '#FFFF00', '#FFD700', '#FFA500', '#FF0000', '#8B0000', '#800080', '#4B0082']
 cmap_wind = mcolors.LinearSegmentedColormap.from_list("wind", W_COLORS, N=256)
 
-# Deine detaillierte Wetter-Skala
 WW_LEGEND_DATA = {
     "Nebel": ("#FFFF00", list(range(40, 50))),
     "Regen leicht": ("#00FF00", [50, 51, 58, 60, 80]),
@@ -62,12 +46,10 @@ with st.sidebar:
     st.header("🛰️ Konfiguration")
     sel_model = st.selectbox("Modell", ["ICON-D2", "ICON-D2-RUC", "ICON-EU", "GFS (NOAA)", "ECMWF"])
     sel_region = st.selectbox("Region", ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"])
-    
     p_opts = ["Temperatur 2m (°C)", "Windböen (km/h)", "500 hPa Geopot. Höhe", "850 hPa Temp."]
     if "ICON-D2" in sel_model: p_opts.append("Signifikantes Wetter")
     sel_param = st.selectbox("Parameter", p_opts)
     
-    # Dynamischer Slider
     max_h, step_h = 48, 1
     if "ICON-D2-RUC" in sel_model: max_h, step_h = 27, 1
     elif "ICON-EU" in sel_model: max_h, step_h = 120, 1
@@ -76,11 +58,10 @@ with st.sidebar:
         
     sel_hour = st.slider("Stunde (+h)", step_h, max_h, step_h, step=step_h)
     show_isobars = st.checkbox("Isobaren (Luftdruck) anzeigen", value=True)
-    
     st.markdown("---")
     generate = st.button("🚀 Karte generieren", use_container_width=True)
 
-# --- 4. ROBUSTER MULTI-FETCH ---
+# --- 4. DATA-FETCH ---
 @st.cache_data(ttl=600)
 def fetch_any_model(model, param, hr):
     p_map = {"Temperatur 2m (°C)": "t_2m", "Windböen (km/h)": "vmax_10m", "500 hPa Geopot. Höhe": "fi", "850 hPa Temp.": "t", "Signifikantes Wetter": "ww", "Isobaren": "pmsl"}
@@ -120,24 +101,26 @@ def fetch_any_model(model, param, hr):
             except: continue
 
     elif "GFS" in model:
+        # NUR DEN GEWÜNSCHTEN PARAMETER LADEN (VERHINDERT LILA-FEHLER)
+        gfs_filter = ""
+        if key == "t_2m": gfs_filter = "&var_TMP=on&lev_2_m_above_ground=on"
+        elif key == "vmax_10m": gfs_filter = "&var_GUST=on&lev_surface=on"
+        elif key == "fi": gfs_filter = "&var_HGT=on&lev_500_mb=on"
+        elif key == "t": gfs_filter = "&var_TMP=on&lev_850_mb=on"
+        elif key == "pmsl": gfs_filter = "&var_PRMSL=on&lev_mean_sea_level=on"
+
         for off in [3, 6, 9, 12]:
             t = now - timedelta(hours=off)
             run = (t.hour // 6) * 6
             dt_s = t.strftime("%Y%m%d")
-            url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?file=gfs.t{run:02d}z.pgrb2.0p25.f{hr:03d}&lev_2_m_above_ground=on&lev_10_m_above_ground=on&lev_500_mb=on&lev_850_mb=on&lev_mean_sea_level=on&var_TMP=on&var_HGT=on&var_GUST=on&var_PRMSL=on&subregion=&leftlon=-20&rightlon=45&toplat=75&bottomlat=30&dir=%2Fgfs.{dt_s}%2F{run:02d}%2Fatmos"
+            url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?file=gfs.t{run:02d}z.pgrb2.0p25.f{hr:03d}{gfs_filter}&subregion=&leftlon=-20&rightlon=45&toplat=75&bottomlat=30&dir=%2Fgfs.{dt_s}%2F{run:02d}%2Fatmos"
             try:
                 r = requests.get(url, headers=headers, timeout=15)
                 if r.status_code == 200:
                     with open("temp_gfs.grib", "wb") as out: out.write(r.content)
                     ds = xr.open_dataset("temp_gfs.grib", engine='cfgrib')
                     var = list(ds.data_vars)[0]
-                    ds_var = ds[var]
-                    if 'isobaricInhPa' in ds_var.dims:
-                        lvl_val = 500 if "500" in param else 850
-                        data_flat = ds_var.sel(isobaricInhPa=lvl_val)
-                    else: data_flat = ds_var
-                    drop_dims = {d: 0 for d in ['step', 'height', 'time', 'valid_time', 'meanSea'] if d in data_flat.dims}
-                    data = data_flat.isel(**drop_dims).values.squeeze()
+                    data = ds[var].isel(step=0, height=0, isobaricInhPa=0, missing_dims='ignore').values.squeeze()
                     lons, lats = ds.longitude.values, ds.latitude.values
                     if lons.ndim == 1: lons, lats = np.meshgrid(lons, lats)
                     return data, lons, lats, f"{dt_s}{run:02d}"
@@ -153,17 +136,15 @@ def fetch_any_model(model, param, hr):
                 r = requests.get(url, headers=headers, timeout=25)
                 if r.status_code == 200:
                     with open("temp_ecmwf.grib", "wb") as out: out.write(r.content)
-                    ecmwf_keys = {"t_2m": "2t", "vmax_10m": "10fg", "fi": "z", "t": "t", "pmsl": "msl"}
-                    e_key = ecmwf_keys.get(key, "2t")
-                    ds = xr.open_dataset("temp_ecmwf.grib", engine='cfgrib', filter_by_keys={'shortName': e_key})
+                    e_keys = {"t_2m": "2t", "vmax_10m": "10fg", "fi": "z", "t": "t", "pmsl": "msl"}
+                    ds = xr.open_dataset("temp_ecmwf.grib", engine='cfgrib', filter_by_keys={'shortName': e_keys.get(key, "2t")})
                     var = list(ds.data_vars)[0]
                     ds_var = ds[var]
                     if 'isobaricInhPa' in ds_var.dims:
                         lvl_val = 500 if "500" in param else 850
                         data_flat = ds_var.sel(isobaricInhPa=lvl_val)
                     else: data_flat = ds_var
-                    drop_dims = {d: 0 for d in ['step', 'height', 'time', 'valid_time', 'surface', 'meanSea'] if d in data_flat.dims}
-                    data = data_flat.isel(**drop_dims).values.squeeze()
+                    data = data_flat.isel(step=0, height=0, missing_dims='ignore').values.squeeze()
                     lons, lats = ds.longitude.values, ds.latitude.values
                     if lons.ndim == 1: lons, lats = np.meshgrid(lons, lats)
                     return data, lons, lats, f"{dt_s}{run:02d}"
@@ -183,13 +164,11 @@ if generate:
         ext = {"Deutschland": [5.8, 15.2, 47.2, 55.1], "Brandenburg/Berlin": [11.2, 14.8, 51.2, 53.6], "Mitteleuropa (DE, PL)": [4.0, 25.0, 45.0, 56.0], "Alpenraum": [5.5, 17.0, 44.0, 49.5], "Europa": [-12, 40, 34, 66]}
         ax.set_extent(ext[sel_region])
 
-        # --- BUNDESLÄNDER & GRENZEN ---
         ax.add_feature(cfeature.COASTLINE, linewidth=0.8, edgecolor='black', zorder=12)
         ax.add_feature(cfeature.BORDERS, linewidth=0.8, edgecolor='black', zorder=12)
         states = cfeature.NaturalEarthFeature(category='cultural', name='admin_1_states_provinces_lines', scale='10m', facecolor='none')
         ax.add_feature(states, linewidth=0.5, edgecolor='black', zorder=12)
 
-        # Plotting Logik
         if "Temperatur" in sel_param or "850 hPa Temp." in sel_param:
             val_c = data - 273.15 if data.max() > 100 else data
             im = ax.pcolormesh(lons, lats, val_c, cmap=cmap_temp, norm=mcolors.Normalize(vmin=-30, vmax=30), shading='auto', zorder=5)
@@ -216,10 +195,10 @@ if generate:
             cs = ax.contour(ilons, ilats, p_hpa, colors='black', linewidths=0.7, levels=np.arange(940, 1060, 4), zorder=20)
             ax.clabel(cs, inline=True, fontsize=8, fmt='%1.0f')
 
-        # Header
+        # HEADER (KLEINERER TEXT)
         valid = datetime.strptime(run_id, "%Y%m%d%H").replace(tzinfo=timezone.utc) + timedelta(hours=sel_hour)
         info = f"{sel_model} | {sel_param}\nTermin: {valid.strftime('%d.%m. %H:00')} UTC\nLauf: {run_id[-2:]}Z"
-        ax.text(0.02, 0.98, info, transform=ax.transAxes, fontsize=8, fontweight='bold', va='top', bbox=dict(facecolor='white', alpha=0.6, boxstyle='round,pad=0.2', edgecolor='none'), zorder=30)
+        ax.text(0.02, 0.98, info, transform=ax.transAxes, fontsize=7, fontweight='bold', va='top', bbox=dict(facecolor='white', alpha=0.6, boxstyle='round,pad=0.2', edgecolor='none'), zorder=30)
         st.pyplot(fig)
 else:
     st.info("🚀 Konfiguration wählen und Starten.")
