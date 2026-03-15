@@ -13,7 +13,6 @@ import numpy as np
 st.set_page_config(page_title="WarnwetterBB | Analyse-Zentrum", layout="wide")
 
 # --- 2. DEINE SPEZIAL-FARBSKALA (SCHLAGARTIGE WECHSEL) ---
-# Normiert von -30 bis +30 (Spanne = 60). Werte werden als Brüche von 60 angegeben.
 temp_colors = [
     (0.0, '#D3D3D3'),       # -30: hellgrau
     (5/60, '#FFFFFF'),      # -25: weiß
@@ -36,22 +35,33 @@ temp_colors = [
 ]
 cmap_temp = mcolors.LinearSegmentedColormap.from_list("custom_temp", temp_colors)
 
-# Wind & Wetter Skalen
 W_COLORS = ['#ADD8E6', '#0000FF', '#008000', '#FFFF00', '#FFD700', '#FFA500', '#FF0000', '#8B0000', '#800080', '#4B0082']
 cmap_wind = mcolors.LinearSegmentedColormap.from_list("wind", W_COLORS, N=256)
 WW_LEGEND_DATA = {"Nebel": "#FFFF00", "Regen leicht": "#90EE90", "Regen stark": "#006400", "Schnee": "#0000FF", "Gewitter": "#800080"}
 
-# --- 3. SIDEBAR ---
+# --- 3. SIDEBAR (DYNAMISCH) ---
 with st.sidebar:
     st.header("🛰️ Konfiguration")
-    sel_model = st.selectbox("Modell", ["ICON-D2", "ICON-D2-RUC", "ICON-EU", "GFS (NOAA)"])
+    sel_model = st.selectbox("Modell", ["ICON-D2", "ICON-D2-RUC", "ICON-EU", "GFS (NOAA)", "ECMWF"])
     sel_region = st.selectbox("Region", ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"])
     
     p_opts = ["Temperatur 2m (°C)", "Windböen (km/h)", "500 hPa Geopot. Höhe", "850 hPa Temp."]
     if "ICON-D2" in sel_model: p_opts.append("Signifikantes Wetter")
     sel_param = st.selectbox("Parameter", p_opts)
     
-    sel_hour = st.slider("Stunde (+h)", 1, 48 if "RUC" not in sel_model else 27, 1)
+    # DYNAMISCHER SCHIEBEREGLER
+    if "ICON-D2-RUC" in sel_model:
+        max_h, step_h = 27, 1
+    elif "ICON-EU" in sel_model:
+        max_h, step_h = 120, 1
+    elif "GFS" in sel_model:
+        max_h, step_h = 120, 3
+    elif "ECMWF" in sel_model:
+        max_h, step_h = 144, 3
+    else: # Normales ICON-D2
+        max_h, step_h = 48, 1
+        
+    sel_hour = st.slider("Stunde (+h)", step_h, max_h, step_h, step=step_h)
     show_isobars = st.checkbox("Isobaren (Luftdruck) anzeigen", value=True)
     
     st.markdown("---")
@@ -65,10 +75,11 @@ def fetch_any_model(model, param, hr):
     now = datetime.now(timezone.utc)
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
 
-    # ICON MODELLE (DWD)
+    # A: ICON MODELLE (DWD)
     if "ICON" in model:
         is_ruc = "RUC" in model
         m_dir = "icon-d2-ruc" if is_ruc else ("icon-d2" if "D2" in model else "icon-eu")
+        reg_str = "europe" if "icon-eu" in m_dir else "germany"
         step = 1 if is_ruc else 3
         
         for off in range(1, 10):
@@ -76,12 +87,11 @@ def fetch_any_model(model, param, hr):
             run = t.hour if is_ruc else (t.hour // 3) * 3
             dt_s = t.replace(hour=run, minute=0, second=0, microsecond=0).strftime("%Y%m%d%H")
             
+            # LOGISCHER FIX: Der fehlende "2d_" String bei Single-Level Daten!
             l_type = "pressure-level" if key in ["fi", "t"] else "single-level"
-            lvl = "500" if "500" in param else ("850" if "850" in param else "")
+            file_end = f"{'500' if '500' in param else '850'}_{key}" if l_type == "pressure-level" else f"2d_{key}"
             
-            url = f"https://opendata.dwd.de/weather/nwp/{m_dir}/grib/{run:02d}/{key}/{m_dir}_germany_regular-lat-lon_{l_type}_{dt_s}_{hr:03d}_{lvl + ('_' if lvl else '')}{key}.grib2.bz2"
-            if "icon-eu" in m_dir:
-                url = f"https://opendata.dwd.de/weather/nwp/icon-eu/grib/{run:02d}/{key}/icon-eu_europe_regular-lat-lon_{l_type}_{dt_s}_{hr:03d}_{lvl + ('_' if lvl else '')}{key}.grib2.bz2"
+            url = f"https://opendata.dwd.de/weather/nwp/{m_dir}/grib/{run:02d}/{key}/{m_dir}_{reg_str}_regular-lat-lon_{l_type}_{dt_s}_{hr:03d}_{file_end}.grib2.bz2"
             
             try:
                 r = requests.get(url, timeout=10)
@@ -93,7 +103,6 @@ def fetch_any_model(model, param, hr):
                     var = list(ds.data_vars)[0]
                     ds_var = ds[var]
                     
-                    # LOGISCHER FIX: Genau die richtige Druckfläche wählen!
                     if 'isobaricInhPa' in ds_var.dims:
                         lvl_val = 500 if "500" in param else 850
                         data_flat = ds_var.sel(isobaricInhPa=lvl_val)
@@ -107,15 +116,13 @@ def fetch_any_model(model, param, hr):
                     return data, lons, lats, dt_s
             except: continue
 
-    # GFS (NOAA)
+    # B: GFS (NOAA)
     elif "GFS" in model:
         for off in [3, 6, 9, 12]:
             t = now - timedelta(hours=off)
             run = (t.hour // 6) * 6
             dt_s = t.strftime("%Y%m%d")
-            
-            # LOGISCHER FIX: Den Filter für GFS massiv vergrößern, damit Europa nicht abgeschnitten wird!
-            url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?file=gfs.t{run:02d}z.pgrb2.0p25.f{hr:03d}&lev_2_m_above_ground=on&lev_10_m_above_ground=on&lev_500_mb=on&lev_850_mb=on&lev_mean_sea_level=on&var_TMP=on&var_HGT=on&var_GUST=on&var_PRMSL=on&subregion=&leftlon=335&rightlon=50&toplat=75&bottomlat=30&dir=%2Fgfs.{dt_s}%2F{run:02d}%2Fatmos"
+            url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?file=gfs.t{run:02d}z.pgrb2.0p25.f{hr:03d}&lev_2_m_above_ground=on&lev_10_m_above_ground=on&lev_500_mb=on&lev_850_mb=on&lev_mean_sea_level=on&var_TMP=on&var_HGT=on&var_GUST=on&var_PRMSL=on&subregion=&leftlon=-20&rightlon=45&toplat=75&bottomlat=30&dir=%2Fgfs.{dt_s}%2F{run:02d}%2Fatmos"
             try:
                 r = requests.get(url, headers=headers, timeout=15)
                 if r.status_code == 200:
@@ -124,7 +131,6 @@ def fetch_any_model(model, param, hr):
                     var = list(ds.data_vars)[0]
                     ds_var = ds[var]
                     
-                    # LOGISCHER FIX: Auch hier die Druckfläche erzwingen!
                     if 'isobaricInhPa' in ds_var.dims:
                         lvl_val = 500 if "500" in param else 850
                         data_flat = ds_var.sel(isobaricInhPa=lvl_val)
@@ -137,7 +143,43 @@ def fetch_any_model(model, param, hr):
                     if lons.ndim == 1: lons, lats = np.meshgrid(lons, lats)
                     return data, lons, lats, f"{dt_s}{run:02d}"
             except: continue
-            
+
+    # C: ECMWF (Open Data)
+    elif "ECMWF" in model:
+        # ECMWF Open Data läuft in der Regel 00Z und 12Z
+        for off in [0, 12, 24]:
+            t = now - timedelta(hours=off)
+            run = (t.hour // 12) * 12
+            dt_s = t.strftime("%Y%m%d")
+            # ECMWF URL Struktur
+            url = f"https://data.ecmwf.int/forecasts/{dt_s}/{run:02d}z/ifs/0p4-beta/oper/{dt_s}{run:02d}0000-{hr}h-oper-fc.grib2"
+            try:
+                # Wir laden die Datei, das kann dauern!
+                r = requests.get(url, headers=headers, timeout=25)
+                if r.status_code == 200:
+                    with open("temp_ecmwf.grib", "wb") as out: out.write(r.content)
+                    # Filtern mit xarray (ECMWF bündelt alles in einer Datei)
+                    ecmwf_keys = {"t_2m": "2t", "vmax_10m": "10fg", "fi": "z", "t": "t", "pmsl": "msl"}
+                    e_key = ecmwf_keys.get(key, "2t")
+                    
+                    # ECMWF Daten sicher laden
+                    ds = xr.open_dataset("temp_ecmwf.grib", engine='cfgrib', filter_by_keys={'shortName': e_key})
+                    var = list(ds.data_vars)[0]
+                    ds_var = ds[var]
+                    
+                    if 'isobaricInhPa' in ds_var.dims:
+                        lvl_val = 500 if "500" in param else 850
+                        data_flat = ds_var.sel(isobaricInhPa=lvl_val)
+                    else: data_flat = ds_var
+                    
+                    drop_dims = {d: 0 for d in ['step', 'height', 'time', 'valid_time', 'surface', 'meanSea'] if d in data_flat.dims}
+                    data = data_flat.isel(**drop_dims).values.squeeze()
+                    
+                    lons, lats = ds.longitude.values, ds.latitude.values
+                    if lons.ndim == 1: lons, lats = np.meshgrid(lons, lats)
+                    return data, lons, lats, f"{dt_s}{run:02d}"
+            except: continue
+
     return None, None, None, None
 
 # --- 5. KARTEN-GENERIERUNG ---
@@ -154,20 +196,17 @@ if generate:
         ext = {"Deutschland": [5.8, 15.2, 47.2, 55.1], "Brandenburg/Berlin": [11.2, 14.8, 51.2, 53.6], "Mitteleuropa (DE, PL)": [4.0, 25.0, 45.0, 56.0], "Alpenraum": [5.5, 17.0, 44.0, 49.5], "Europa": [-12, 40, 34, 66]}
         ax.set_extent(ext[sel_region])
 
-        # KÜSTEN & GRENZEN (Scharf)
         ax.add_feature(cfeature.COASTLINE, linewidth=0.8, edgecolor='black', zorder=12)
         ax.add_feature(cfeature.BORDERS, linewidth=0.8, edgecolor='black', zorder=12)
 
-        # PLOTTING
         if "Temperatur" in sel_param or "850 hPa Temp." in sel_param:
-            val = data - 273.15 if data.max() > 100 else data
-            # Die Skala wird strikt von -30 bis +30 gezwungen, passend zur neuen ColorMap
-            im = ax.pcolormesh(lons, lats, val, cmap=cmap_temp, norm=mcolors.Normalize(vmin=-30, vmax=30), shading='auto', zorder=5)
-            # Legende exakt in 10er Schritten
+            val_c = data - 273.15 if data.max() > 100 else data
+            im = ax.pcolormesh(lons, lats, val_c, cmap=cmap_temp, norm=mcolors.Normalize(vmin=-30, vmax=30), shading='auto', zorder=5)
             plt.colorbar(im, label="°C", shrink=0.4, pad=0.02, ticks=np.arange(-30, 31, 10))
 
         elif "Geopot" in sel_param:
-            val = data / 10 if data.max() > 1000 else data
+            # ECMWF liefert Geopotential oft anders als GFS, Standardisierung in gpdm:
+            val = (data / 9.80665) / 10 if data.max() > 10000 else data / 10
             im = ax.pcolormesh(lons, lats, val, cmap='nipy_spectral', shading='auto', zorder=5)
             plt.colorbar(im, label="gpdm", shrink=0.4)
             
@@ -181,13 +220,12 @@ if generate:
             cs = ax.contour(ilons, ilats, p_hpa, colors='black', linewidths=0.7, levels=np.arange(940, 1060, 4), zorder=20)
             ax.clabel(cs, inline=True, fontsize=8, fmt='%1.0f')
 
-        # INFO TEXT OBEN LINKS (Kleiner und dezenter)
         valid = datetime.strptime(run_id, "%Y%m%d%H").replace(tzinfo=timezone.utc) + timedelta(hours=sel_hour)
         info = f"{sel_model} | {sel_param}\nTermin: {valid.strftime('%d.%m. %H:00')} UTC\nLauf: {run_id[-2:]}Z"
-        ax.text(0.02, 0.98, info, transform=ax.transAxes, fontsize=7, fontweight='bold', va='top', bbox=dict(facecolor='white', alpha=0.6, boxstyle='round,pad=0.2', edgecolor='none'), zorder=30)
+        ax.text(0.02, 0.98, info, transform=ax.transAxes, fontsize=8, fontweight='bold', va='top', bbox=dict(facecolor='white', alpha=0.6, boxstyle='round,pad=0.2', edgecolor='none'), zorder=30)
 
         st.pyplot(fig)
     else:
-        st.error(f"Modell {sel_model} ist für diesen Zeitschritt gerade nicht auf dem Server erreichbar.")
+        st.error(f"Modell {sel_model} ist für diesen Zeitschritt (+{sel_hour}h) gerade nicht auf dem Server erreichbar. Versuche eine andere Stunde oder ein anderes Modell.")
 else:
     st.info("Einstellungen wählen und auf 'Karte generieren' klicken.")
