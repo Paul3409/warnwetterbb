@@ -14,13 +14,14 @@ from zoneinfo import ZoneInfo
 import numpy as np
 
 # ==============================================================================
-# 1. SETUP & KONFIGURATION DER METEO-ZENTRALE
+# 1. SETUP, KONFIGURATION & CACHE-MANAGEMENT
 # ==============================================================================
-st.set_page_config(page_title="WarnwetterBB | Unwetter-Zentrale", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="WarnwetterBB | Pro-Zentrale", layout="wide", initial_sidebar_state="expanded")
 
 def cleanup_temp_files():
-    """Löscht temporäre GRIB-Dateien restlos vom Server, um Memory Leaks zu verhindern."""
-    for file in ["temp.grib", "temp_gfs.grib", "temp_ecmwf.grib"]:
+    """Aggressive Bereinigung aller temporären GRIB-Reste auf dem Server."""
+    temp_files = ["temp.grib", "temp_gfs.grib", "temp_ecmwf.grib", "temp.grib.idx", "temp_gfs.grib.idx"]
+    for file in temp_files:
         if os.path.exists(file):
             try:
                 os.remove(file)
@@ -31,10 +32,10 @@ LOCAL_TZ = ZoneInfo("Europe/Berlin")
 WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 # ==============================================================================
-# 2. METEOROLOGISCHE FARBSKALEN (HOCHPRÄZISE & OPTIMIERT)
+# 2. MASTER-FARBSKALEN (DEINE EXAKTE HTML-PALETTE FÜR NIEDERSCHLAG)
 # ==============================================================================
 
-# --- TEMPERATUR & TAUPUNKT (Die schlagartigen 10er-Sprünge) ---
+# --- TEMPERATUR (Glatter 10er Übergang) ---
 temp_colors = [
     (0.0, '#D3D3D3'), (5/60, '#FFFFFF'), (10/60, '#FFC0CB'), (15/60, '#FF00FF'),
     (20/60, '#800080'), (20.01/60, '#00008B'), (25/60, '#0000CD'), (29.99/60, '#ADD8E6'),
@@ -43,8 +44,7 @@ temp_colors = [
 ]
 cmap_temp = mcolors.LinearSegmentedColormap.from_list("custom_temp", temp_colors)
 
-# --- NIEDERSCHLAG (DEINE EXAKTE HTML-FARBPALETTE) ---
-# Werte in Millimeter
+# --- NIEDERSCHLAG (DEINE EXAKTE HTML-FARBPALETTE - PERFEKTIONIERTER ÜBERGANG) ---
 precip_values = [0, 0.2, 0.5, 1.0, 1.5, 2.0, 3, 4, 5, 8, 12, 15, 20, 30, 40, 50]
 precip_colors = [
     '#FFFFFF', # 0: white
@@ -64,7 +64,6 @@ precip_colors = [
     '#7B68EE', # 40: mediumslateblue
     '#FFFFFF'  # 50: richtung weiß
 ]
-
 vmax_precip = 50.0
 precip_anchors = [v / vmax_precip for v in precip_values]
 cmap_precip = mcolors.LinearSegmentedColormap.from_list("custom_precip", list(zip(precip_anchors, precip_colors)))
@@ -79,7 +78,7 @@ cape_colors = [
 cmap_cape = mcolors.ListedColormap(cape_colors)
 norm_cape = mcolors.BoundaryNorm(cape_levels, cmap_cape.N)
 
-# --- RADAR (ORIGINAL DWD FARBPROFIL) ---
+# --- RADAR (ORIGINAL DWD FARBPROFIL - HARTE KANTEN) ---
 radar_levels = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80]
 radar_colors = [
     '#FFFFFF', '#B0E0E6', '#00BFFF', '#0000FF', '#00FF00', '#32CD32', '#008000', 
@@ -121,39 +120,65 @@ cmap_ww = mcolors.ListedColormap(['#FFFFFF00'] + [c for l, (c, codes) in WW_LEGE
 
 
 # ==============================================================================
-# 3. HELPER: VERFÜGBARKEITS-LOGIK FÜR MODELLE
+# 3. DAS EISERNE ROUTING-SYSTEM (VERHINDERT 404-FEHLER!)
 # ==============================================================================
-ALL_REGIONS = ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"]
-ALL_PARAMS = [
-    "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
-    "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "CAPE (J/kg)", 
-    "CIN (J/kg)", "Gesamtbedeckung (%)", "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)",
-    "Signifikantes Wetter", "Sichtweite (m)", "Wolkenuntergrenze (m)", "Wolkenobergrenze (m)", 
-    "Spezifische Feuchte (g/kg)", "Simuliertes Radar (dBZ)", "Helizität / SRH (m²/s²)", 
-    "Sonnenscheindauer (Min)", "0-Grad-Grenze (m)", "Lifted Index (K)"
-]
+# Diese Struktur definiert EXAKT, welches Modell welche Daten wirklich berechnet.
 
-def get_valid_regions(model):
-    if model in ["ICON-D2", "ICON-D2-RUC"]:
-        return ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum"]
-    return ALL_REGIONS
-
-def get_valid_params(model):
-    base = [
-        "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
-        "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "CAPE (J/kg)", 
-        "CIN (J/kg)", "Gesamtbedeckung (%)", "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)"
-    ]
-    if "ICON" in model:
-        base.extend(["Signifikantes Wetter", "Sichtweite (m)", "Wolkenuntergrenze (m)", "Wolkenobergrenze (m)", "Spezifische Feuchte (g/kg)"])
-    if "ICON-D2" in model:
-        base.extend(["Simuliertes Radar (dBZ)", "Helizität / SRH (m²/s²)", "Sonnenscheindauer (Min)"])
-    if "GFS" in model or "ECMWF" in model:
-        base.extend(["0-Grad-Grenze (m)", "Lifted Index (K)"])
-    return base
+MODEL_ROUTER = {
+    "ICON-D2": {
+        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum"],
+        "params": ["Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
+                   "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "CAPE (J/kg)", 
+                   "CIN (J/kg)", "Gesamtbedeckung (%)", "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)",
+                   "Signifikantes Wetter", "Sichtweite (m)", "Wolkenuntergrenze (m)", "Wolkenobergrenze (m)", 
+                   "Spezifische Feuchte (g/kg)", "Simuliertes Radar (dBZ)", "Helizität / SRH (m²/s²)", 
+                   "Sonnenscheindauer (Min)"]
+    },
+    "ICON-D2-RUC": {
+        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum"],
+        "params": ["Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
+                   "Niederschlag (mm)", "CAPE (J/kg)", "Gesamtbedeckung (%)", "Schneehöhe (cm)",
+                   "Sichtweite (m)", "Wolkenuntergrenze (m)", "Wolkenobergrenze (m)", "Simuliertes Radar (dBZ)", 
+                   "Helizität / SRH (m²/s²)"] # RUC berechnet keine Geopot. Höhe im OpenData!
+    },
+    "ICON-EU": {
+        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"],
+        "params": ["Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
+                   "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "CAPE (J/kg)", 
+                   "CIN (J/kg)", "Gesamtbedeckung (%)", "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)",
+                   "Signifikantes Wetter", "Sichtweite (m)", "Wolkenuntergrenze (m)", "Wolkenobergrenze (m)"]
+    },
+    "ICON (Global)": {
+        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"],
+        "params": ["Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
+                   "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "CAPE (J/kg)", 
+                   "CIN (J/kg)", "Gesamtbedeckung (%)", "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)"]
+    },
+    "GFS (NOAA)": {
+        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"],
+        "params": ["Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
+                   "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "CAPE (J/kg)", 
+                   "CIN (J/kg)", "Gesamtbedeckung (%)", "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)",
+                   "0-Grad-Grenze (m)", "Lifted Index (K)", "Sichtweite (m)", "Wolkenuntergrenze (m)"]
+    },
+    "ECMWF": {
+        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"],
+        "params": ["Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
+                   "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "Gesamtbedeckung (%)"] 
+                   # ECMWF liefert im Gratis-Layer kein CAPE oder Radar!
+    },
+    "ECMWF-AIFS (KI-Modell)": {
+        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"],
+        "params": ["Temperatur 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
+                   "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)"]
+    }
+}
 
 def estimate_latest_run(model, now_utc):
-    if "RUC" in model: return now_utc.replace(minute=0, second=0, microsecond=0) - timedelta(hours=2)
+    """Präzise Schätzung des aktuellsten Modelllaufs inkl. Server-Delay"""
+    if "RUC" in model: 
+        # RUC ist schnell, braucht ca. 1.5 Stunden für den Upload
+        return now_utc.replace(minute=0, second=0, microsecond=0) - timedelta(hours=2)
     elif "D2" in model or "EU" in model:
         run_h = ((now_utc.hour - 3) // 3) * 3
         if run_h < 0: return (now_utc - timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0)
@@ -169,27 +194,25 @@ def estimate_latest_run(model, now_utc):
 
 
 # ==============================================================================
-# 4. DYNAMISCHE SIDEBAR (AUSGEGRAUT, NICHT ENTFERNT!)
+# 4. DYNAMISCHE SIDEBAR (100% SICHERE AUSWAHL)
 # ==============================================================================
 with st.sidebar:
     st.header("🛰️ Modell-Zentrale")
     
     with st.expander("🌍 1. Modell wählen", expanded=True):
-        model_list = ["ICON-D2", "ICON-D2-RUC", "ICON-EU", "ICON (Global)", "GFS (NOAA)", "ECMWF", "ECMWF-AIFS (KI-Modell)"]
-        sel_model = st.radio("Wettermodell", model_list, label_visibility="collapsed")
+        sel_model = st.radio("Wettermodell", list(MODEL_ROUTER.keys()), label_visibility="collapsed")
     
     with st.expander("🗺️ 2. Karten-Ausschnitt", expanded=False):
-        valid_regions = get_valid_regions(sel_model)
-        formatted_regions = [r if r in valid_regions else f"{r}  🚫 (ausgegraut)" for r in ALL_REGIONS]
-        sel_region_raw = st.radio("Region", formatted_regions, label_visibility="collapsed")
+        valid_regions = MODEL_ROUTER[sel_model]["regions"]
+        sel_region = st.radio("Region", valid_regions, label_visibility="collapsed")
     
     with st.expander("🌪️ 3. Parameter wählen", expanded=True):
-        valid_params = get_valid_params(sel_model)
-        formatted_params = [p if p in valid_params else f"{p}  🚫 (ausgegraut)" for p in ALL_PARAMS]
-        sel_param_raw = st.radio("Parameter", formatted_params, label_visibility="collapsed")
+        valid_params = MODEL_ROUTER[sel_model]["params"]
+        sel_param = st.radio("Parameter", valid_params, label_visibility="collapsed")
     
     with st.expander("⏱️ 4. Vorhersage-Stunde (MEZ/MESZ)", expanded=True):
-        if "RUC" in sel_model: hours = list(range(1, 28))
+        # Stundenlimitierungen an die echten Modellkapazitäten angepasst
+        if "RUC" in sel_model: hours = list(range(1, 28)) # RUC rechnet maximal +27h!
         elif "EU" in sel_model: hours = list(range(1, 79))
         elif "GFS" in sel_model or "Global" in sel_model: hours = list(range(3, 123, 3))
         elif "ECMWF" in sel_model: hours = list(range(3, 147, 3))
@@ -213,24 +236,18 @@ with st.sidebar:
     show_isobars = st.checkbox("Isobaren (Luftdruck) einblenden", value=True)
     st.markdown("---")
     generate = st.button("🚀 Profi-Karte generieren", use_container_width=True)
-
-if generate:
-    if "🚫" in sel_region_raw:
-        st.warning(f"Die Region '{sel_region_raw.replace('  🚫 (ausgegraut)', '')}' wird vom {sel_model} nicht abgedeckt.")
-        st.stop()
-    if "🚫" in sel_param_raw:
-        st.warning(f"Der Parameter '{sel_param_raw.replace('  🚫 (ausgegraut)', '')}' existiert bei {sel_model} nicht.")
-        st.stop()
-
-sel_region = sel_region_raw.replace("  🚫 (ausgegraut)", "")
-sel_param = sel_param_raw.replace("  🚫 (ausgegraut)", "")
+    
+    # Versteckte Debug-Konsole für Fehleranalyse
+    with st.expander("🛠️ Entwickler-Konsole"):
+        debug_mode = st.checkbox("URL-Ping aktivieren (Zeigt interne Serveranfragen)")
 
 
 # ==============================================================================
-# 5. DATA FETCH ENGINE
+# 5. DATA FETCH ENGINE (EXTREM ROBUST MIT DEEP-SCAN)
 # ==============================================================================
 @st.cache_data(ttl=600, show_spinner=False)
-def fetch_meteo_data(model, param, hr):
+def fetch_meteo_data(model, param, hr, debug=False):
+    # Mapping auf die GRIB ShortNames der Server (Korrigiert für hbas_con!)
     p_map = {
         "Temperatur 2m (°C)": "t_2m", "Taupunkt 2m (°C)": "td_2m", "Windböen (km/h)": "vmax_10m", 
         "Bodendruck (hPa)": "sp", "500 hPa Geopot. Höhe": "fi", "850 hPa Temp.": "t", 
@@ -244,7 +261,9 @@ def fetch_meteo_data(model, param, hr):
     key = p_map.get(param, "t_2m")
     now = datetime.now(timezone.utc)
     headers = {'User-Agent': 'Mozilla/5.0'}
+    debug_logs = []
 
+    # --- A: DWD LOGIK (MIT DEEP SCAN) ---
     if "ICON" in model:
         is_ruc = "RUC" in model
         is_global = "Global" in model
@@ -254,7 +273,8 @@ def fetch_meteo_data(model, param, hr):
         elif "D2" in model: m_dir, reg_str = "icon-d2", "icon-d2_germany"
         else: m_dir, reg_str = "icon-eu", "icon-eu_europe"
         
-        for off in range(1, 15):
+        # DEEP SCAN: Er sucht bis zu 18 Stunden rückwärts, falls der DWD einen Lauf verzögert oder löscht!
+        for off in range(1, 18):
             t = now - timedelta(hours=off)
             if is_ruc: run = t.hour
             elif is_global: run = (t.hour // 6) * 6
@@ -262,14 +282,16 @@ def fetch_meteo_data(model, param, hr):
             
             dt_s = t.replace(hour=run, minute=0, second=0, microsecond=0).strftime("%Y%m%d%H")
             
+            # Genaue Level-Typ Bestimmung (DWD hat hbas_con im single-level Ordner)
             l_type = "pressure-level" if key in ["fi", "t", "relhum", "qv"] else "single-level"
             if l_type == "pressure-level": lvl_str = f"{'500' if '500' in param else '700' if '700' in param else '850'}_"
             else: lvl_str = "2d_"
             
             url = f"https://opendata.dwd.de/weather/nwp/{m_dir}/grib/{run:02d}/{key}/{reg_str}_regular-lat-lon_{l_type}_{dt_s}_{hr:03d}_{lvl_str}{key}.grib2.bz2"
+            debug_logs.append(url)
             
             try:
-                r = requests.get(url, timeout=10)
+                r = requests.get(url, timeout=5)
                 if r.status_code == 200:
                     with bz2.open(io.BytesIO(r.content)) as f_bz2:
                         with open("temp.grib", "wb") as f_out: f_out.write(f_bz2.read())
@@ -281,9 +303,10 @@ def fetch_meteo_data(model, param, hr):
                     data = ds_var.isel(step=0, height=0, missing_dims='ignore').values.squeeze()
                     lons, lats = ds.longitude.values, ds.latitude.values
                     if lons.ndim == 1: lons, lats = np.meshgrid(lons, lats)
-                    return data, lons, lats, dt_s
+                    return data, lons, lats, dt_s, debug_logs
             except Exception: continue
 
+    # --- B: GFS LOGIK ---
     elif "GFS" in model:
         gfs_map = {
             "t_2m": "&var_TMP=on&lev_2_m_above_ground=on", "td_2m": "&var_DPT=on&lev_2_m_above_ground=on",
@@ -293,24 +316,27 @@ def fetch_meteo_data(model, param, hr):
             "tot_prec": "&var_APCP=on&lev_surface=on", "hgt_0c": "&var_HGT=on&lev_0C_isotherm=on",
             "clct": "&var_TCDC=on&lev_entire_atmosphere=on", "relhum": "&var_RH=on&lev_700_mb=on",
             "h_snow": "&var_SNOD=on&lev_surface=on", "sp": "&var_PRES=on&lev_surface=on",
-            "sli": "&var_4LFTX=on&lev_surface=on"
+            "sli": "&var_4LFTX=on&lev_surface=on", "vis": "&var_VIS=on&lev_surface=on",
+            "hbas_con": "&var_HGT=on&lev_cloud_base=on"
         }
         gfs_p = gfs_map.get(key, "")
-        for off in [3, 6, 9, 12, 18]:
+        for off in [3, 6, 9, 12, 18, 24]:
             t = now - timedelta(hours=off)
             run = (t.hour // 6) * 6
             dt_s = t.strftime("%Y%m%d")
             url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?file=gfs.t{run:02d}z.pgrb2.0p25.f{hr:03d}{gfs_p}&subregion=&leftlon=-20&rightlon=45&toplat=75&bottomlat=30&dir=%2Fgfs.{dt_s}%2F{run:02d}%2Fatmos"
+            debug_logs.append(url)
             try:
-                r = requests.get(url, headers=headers, timeout=15)
+                r = requests.get(url, headers=headers, timeout=10)
                 if r.status_code == 200:
                     with open("temp_gfs.grib", "wb") as f: f.write(r.content)
                     ds = xr.open_dataset("temp_gfs.grib", engine='cfgrib')
                     data = ds[list(ds.data_vars)[0]].isel(step=0, height=0, isobaricInhPa=0, missing_dims='ignore').values.squeeze()
                     lons, lats = np.meshgrid(ds.longitude.values, ds.latitude.values)
-                    return data, lons, lats, f"{dt_s}{run:02d}"
+                    return data, lons, lats, f"{dt_s}{run:02d}", debug_logs
             except Exception: continue
 
+    # --- C: ECMWF & AIFS LOGIK ---
     elif "ECMWF" in model:
         sys_type = "aifs" if "AIFS" in model else "ifs"
         for off in [0, 12, 24, 36]:
@@ -318,14 +344,14 @@ def fetch_meteo_data(model, param, hr):
             run = (t.hour // 12) * 12
             dt_s = t.strftime("%Y%m%d")
             url = f"https://data.ecmwf.int/forecasts/{dt_s}/{run:02d}z/{sys_type}/0p25-beta/oper/{dt_s}{run:02d}0000-{hr}h-oper-fc.grib2"
+            debug_logs.append(url)
             try:
-                r = requests.get(url, timeout=25)
+                r = requests.get(url, timeout=15)
                 if r.status_code == 200:
                     with open("temp_ecmwf.grib", "wb") as f: f.write(r.content)
                     e_k = {
                         "t_2m": "2t", "td_2m": "2d", "vmax_10m": "10fg", "fi": "z", "t": "t", 
-                        "pmsl": "msl", "cape_ml": "cape", "cin_ml": "cin", "tot_prec": "tp",
-                        "clct": "tcc", "relhum": "r", "h_snow": "sd", "sp": "sp", "sli": "li"
+                        "pmsl": "msl", "tot_prec": "tp", "clct": "tcc", "sp": "sp"
                     }.get(key, "2t")
                     ds = xr.open_dataset("temp_ecmwf.grib", engine='cfgrib', filter_by_keys={'shortName': e_k})
                     ds_var = ds[list(ds.data_vars)[0]]
@@ -334,21 +360,27 @@ def fetch_meteo_data(model, param, hr):
                         ds_var = ds_var.sel(isobaricInhPa=target_p)
                     data = ds_var.isel(step=0, height=0, missing_dims='ignore').values.squeeze()
                     lons, lats = np.meshgrid(ds.longitude.values, ds.latitude.values)
-                    return data, lons, lats, f"{dt_s}{run:02d}"
+                    return data, lons, lats, f"{dt_s}{run:02d}", debug_logs
             except Exception: continue
-    return None, None, None, None
+            
+    return None, None, None, None, debug_logs
 
 # ==============================================================================
-# 6. KARTENGENERATOR & PLOTTING
+# 6. KARTENGENERATOR & PLOTTING (DIE ABSOLUTE ENGINE)
 # ==============================================================================
 if generate:
     cleanup_temp_files()
-    with st.spinner(f"🛰️ Kontaktiere Wetterrechner... Lade {sel_param} aus {sel_model}"):
-        data, lons, lats, run_id = fetch_meteo_data(sel_model, sel_param, sel_hour)
-        iso_data, ilons, ilats, _ = fetch_meteo_data(sel_model, "Isobaren", sel_hour) if show_isobars else (None, None, None, None)
+    
+    with st.spinner(f"🛰️ Lade {sel_param} aus {sel_model}..."):
+        data, lons, lats, run_id, d_logs = fetch_meteo_data(sel_model, sel_param, sel_hour, debug_mode)
+        iso_data, ilons, ilats, _, _ = fetch_meteo_data(sel_model, "Isobaren", sel_hour) if show_isobars else (None, None, None, None, None)
+
+    if debug_mode and d_logs:
+        st.write("📡 **Interne Server-Pings:**")
+        for log in d_logs[:3]: st.code(log)
 
     if data is not None:
-        fig, ax = plt.subplots(figsize=(8, 10), subplot_kw={'projection': ccrs.PlateCarree()}, dpi=120)
+        fig, ax = plt.subplots(figsize=(8, 10), subplot_kw={'projection': ccrs.PlateCarree()}, dpi=150)
         
         extents = {
             "Deutschland": [5.8, 15.2, 47.2, 55.1], 
@@ -359,6 +391,7 @@ if generate:
         }
         ax.set_extent(extents[sel_region])
 
+        # Scharfe topografische Overlays
         ax.add_feature(cfeature.COASTLINE, linewidth=0.8, edgecolor='black', zorder=12)
         ax.add_feature(cfeature.BORDERS, linewidth=0.8, edgecolor='black', zorder=12)
         states = cfeature.NaturalEarthFeature(category='cultural', name='admin_1_states_provinces_lines', scale='10m', facecolor='none')
@@ -387,8 +420,6 @@ if generate:
             
         elif "Niederschlag" in sel_param:
             im = ax.pcolormesh(lons, lats, data, cmap=cmap_precip, norm=norm_precip, shading='auto', zorder=5)
-            
-            # SAUBERE 5er-SCHRITTE FÜR DIE LEGENDE
             ticks_precip = list(range(0, 55, 5)) 
             plt.colorbar(im, label="Niederschlagssumme in mm", shrink=0.4, ticks=ticks_precip)
             
@@ -479,7 +510,26 @@ if generate:
         ax.text(0.02, 0.98, info_txt, transform=ax.transAxes, fontsize=7, fontweight='bold', va='top', bbox=dict(facecolor='white', alpha=0.8, boxstyle='round,pad=0.3', edgecolor='gray'), zorder=30)
 
         st.pyplot(fig)
+        
+        # ----------------------------------------------------------------------
+        # BILD-DOWNLOAD GENERIEREN
+        # ----------------------------------------------------------------------
+        img_buffer = io.BytesIO()
+        fig.savefig(img_buffer, format='png', bbox_inches='tight', dpi=150)
+        img_buffer.seek(0)
+        
+        col1, col2, col3 = st.columns([1,2,1])
+        with col2:
+            st.download_button(
+                label="📥 Karte als PNG speichern",
+                data=img_buffer,
+                file_name=f"WarnwetterBB_{sel_model}_{sel_param.replace(' ', '_')}_{sel_hour}h.png",
+                mime="image/png",
+                use_container_width=True
+            )
+        
         cleanup_temp_files()
         
     else:
-        st.error(f"⚠️ Schwerer Datenfehler: {sel_model} liefert für '{sel_param}' (+{sel_hour}h) aktuell keine Daten aus.")
+        st.error(f"⚠️ Der Server von {sel_model} liefert für '{sel_param}' (+{sel_hour}h) aktuell keine Daten aus.")
+        st.info("💡 Tipp: Versuch eine etwas spätere Vorhersagestunde oder aktiviere in der Sidebar die 'Entwickler-Konsole', um die DWD-Anfragen zu prüfen.")
