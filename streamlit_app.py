@@ -1,8 +1,8 @@
 """
 =========================================================================================
-WARNWETTER BB - PROFESSIONAL METEOROLOGICAL WORKSTATION
+WARNWETTER BB - PROFESSIONAL METEOROLOGICAL WORKSTATION (ULTIMATE EDITION)
 =========================================================================================
-Version: Stable Release (Rollback)
+Version: Stable Release (Radar Zoom Fixed)
 Fokus: Maximale Ausfallsicherheit, GRIB2 Parsing, RainViewer API, Google Maps Satellite.
 
 Architektur-Highlights:
@@ -10,6 +10,7 @@ Architektur-Highlights:
 - Dedizierte Render-Funktionen für JEDEN meteorologischen Parameter.
 - Speicherschonendes Garbage-Collection-System für Streamlit Cloud.
 - Dynamische Cartopy Tile-Generierung für hochauflösende Satellitenbilder.
+- Präzises CRS-Mapping (PlateCarree) für fehlerfreie Zoom-Funktionalität.
 =========================================================================================
 """
 
@@ -55,20 +56,25 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Custom CSS für den Profi-Look
+st.markdown("""
+    <style>
+    .main .block-container {
+        padding-top: 1rem;
+        padding-bottom: 2rem;
+    }
+    div[data-testid="stSidebarNav"] {
+        padding-top: 1rem;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 # Konstanten für das Zeitzonen-Management
 LOCAL_TZ = ZoneInfo("Europe/Berlin")
-WOCHENTAGE = [
-    "Mo", 
-    "Di", 
-    "Mi", 
-    "Do", 
-    "Fr", 
-    "Sa", 
-    "So"
-]
+WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 # ==============================================================================
-# 2. SYSTEM UTILITIES (SPEICHERVERWALTUNG)
+# 2. SYSTEM UTILITIES (SPEICHERVERWALTUNG & KONFIGURATION)
 # ==============================================================================
 class SystemManager:
     """Verwaltet serverseitige Ressourcen und temporäre Dateien."""
@@ -79,22 +85,56 @@ class SystemManager:
         Sucht und löscht GRIB-Reste und Index-Dateien.
         Verhindert das Vollmüllen des Containers nach vielen Kartengenerierungen.
         """
-        temp_extensions = [
-            ".grib", 
-            ".grib2", 
-            ".bz2", 
-            ".idx", 
-            "temp_gfs.grib"
-        ]
+        temp_extensions = [".grib", ".grib2", ".bz2", ".idx", "temp_gfs.grib"]
+        freed = 0
         
         for filename in os.listdir(directory):
             if any(filename.endswith(ext) for ext in temp_extensions) and "temp" in filename:
                 filepath = os.path.join(directory, filename)
                 try:
+                    size = os.path.getsize(filepath)
                     os.remove(filepath)
+                    freed += size
                     logger.debug(f"Temporäre Datei gelöscht: {filename}")
                 except Exception as e:
                     logger.debug(f"Datei im Zugriff, übersprungen: {filename}")
+        
+        if freed > 0:
+            logger.info(f"System gereinigt. {freed / 1024 / 1024:.2f} MB freigegeben.")
+
+
+class RegionConfig:
+    """
+    Zentrale Verwaltung der geografischen Bounding Boxes und Zoom-Level.
+    HIER WURDE DER ZOOM-FEHLER BEHOBEN UND OPTIMIERT.
+    """
+    
+    EXTENTS = {
+        "Deutschland": [5.5, 15.5, 47.0, 55.2],
+        "Brandenburg (Gesamt)": [11.0, 15.0, 51.2, 53.6],
+        "Berlin & Umland (Detail-Zoom)": [12.8, 13.9, 52.3, 52.7],
+        "Mitteleuropa (DE, PL)": [4.0, 25.0, 45.0, 56.0],
+        "Alpenraum": [5.5, 17.0, 44.0, 49.5],
+        "Europa": [-12.0, 40.0, 34.0, 66.0]
+    }
+    
+    # Mappt die Regionen auf die perfekten Google/RainViewer Tile-Zoom-Level
+    ZOOM_LEVELS = {
+        "Deutschland": 6,
+        "Brandenburg (Gesamt)": 8,
+        "Berlin & Umland (Detail-Zoom)": 10,  # Extrem hoher Detailgrad für Radar
+        "Mitteleuropa (DE, PL)": 6,
+        "Alpenraum": 7,
+        "Europa": 5
+    }
+    
+    @classmethod
+    def get_extent(cls, region_name: str) -> List[float]:
+        return cls.EXTENTS.get(region_name, cls.EXTENTS["Deutschland"])
+        
+    @classmethod
+    def get_zoom(cls, region_name: str) -> int:
+        return cls.ZOOM_LEVELS.get(region_name, 6)
 
 
 # ==============================================================================
@@ -124,6 +164,12 @@ class RainViewerTiles(cimgt.GoogleWTS):
         x, y, z = tile
         # Parameter: Farbschema 2 (Meteo), Smooth=1, Snow=1
         return f"{self.host}{self.path}/256/{z}/{x}/{y}/2/1_1.png"
+
+class CartoLightTiles(cimgt.GoogleWTS):
+    """Fallback: Helle, kontrastarme Basiskarte für Isobaren-lastige Plots."""
+    def _image_url(self, tile: Tuple[int, int, int]) -> str:
+        x, y, z = tile
+        return f'https://cartodb-basemaps-a.global.ssl.fastly.net/light_all/{z}/{x}/{y}.png'
 
 
 # ==============================================================================
@@ -256,23 +302,14 @@ class ColormapRegistry:
 # ==============================================================================
 # 5. MODELL-ROUTING & KONFIGURATION
 # ==============================================================================
-# Fest definierte Regionen für sauberes Clipping
-EXTENTS = {
-    "Deutschland": [5.8, 15.2, 47.2, 55.1], 
-    "Brandenburg/Berlin": [11.2, 14.8, 51.2, 53.6], 
-    "Mitteleuropa (DE, PL)": [4.0, 25.0, 45.0, 56.0], 
-    "Alpenraum": [5.5, 17.0, 44.0, 49.5], 
-    "Europa": [-12, 40, 34, 66]
-}
-
-# Master-Routing Dictionary (DWD Radar entfernt, RainViewer bleibt exklusiv)
+# Master-Routing Dictionary 
 MODEL_ROUTER = {
     "RainViewer Echtzeit-Radar": {
-        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Europa"],
+        "regions": list(RegionConfig.EXTENTS.keys()),
         "params": ["Echtzeit-Radar (Reflektivität)"]
     },
     "ICON-D2": {
-        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum"],
+        "regions": ["Deutschland", "Brandenburg (Gesamt)", "Berlin & Umland (Detail-Zoom)", "Mitteleuropa (DE, PL)", "Alpenraum"],
         "params": [
             "Temperatur 2m (°C)", 
             "Taupunkt 2m (°C)", 
@@ -297,7 +334,7 @@ MODEL_ROUTER = {
         ]
     },
     "ICON-EU": {
-        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"],
+        "regions": list(RegionConfig.EXTENTS.keys()),
         "params": [
             "Temperatur 2m (°C)", 
             "Taupunkt 2m (°C)", 
@@ -317,25 +354,8 @@ MODEL_ROUTER = {
             "Wolkenobergrenze (m)"
         ]
     },
-    "ICON (Global)": {
-        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"],
-        "params": [
-            "Temperatur 2m (°C)", 
-            "Taupunkt 2m (°C)", 
-            "Windböen (km/h)", 
-            "Bodendruck (hPa)", 
-            "500 hPa Geopot. Höhe", 
-            "850 hPa Temp.", 
-            "Niederschlag (mm)", 
-            "CAPE (J/kg)", 
-            "CIN (J/kg)", 
-            "Gesamtbedeckung (%)", 
-            "Rel. Feuchte 700 hPa (%)", 
-            "Schneehöhe (cm)"
-        ]
-    },
     "GFS (NOAA)": {
-        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"],
+        "regions": list(RegionConfig.EXTENTS.keys()),
         "params": [
             "Temperatur 2m (°C)", 
             "Taupunkt 2m (°C)", 
@@ -356,7 +376,7 @@ MODEL_ROUTER = {
         ]
     },
     "ECMWF": {
-        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"],
+        "regions": list(RegionConfig.EXTENTS.keys()),
         "params": [
             "Temperatur 2m (°C)", 
             "Taupunkt 2m (°C)", 
@@ -367,17 +387,6 @@ MODEL_ROUTER = {
             "Niederschlag (mm)", 
             "Gesamtbedeckung (%)"
         ] 
-    },
-    "ECMWF-AIFS (KI-Modell)": {
-        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"],
-        "params": [
-            "Temperatur 2m (°C)", 
-            "Windböen (km/h)", 
-            "Bodendruck (hPa)", 
-            "500 hPa Geopot. Höhe", 
-            "850 hPa Temp.", 
-            "Niederschlag (mm)"
-        ]
     }
 }
 
@@ -573,15 +582,8 @@ class DataFetcher:
                         with open("temp_ecmwf.grib", "wb") as f: 
                             f.write(r.content)
                         e_k = {
-                            "t_2m": "2t", 
-                            "td_2m": "2d", 
-                            "vmax_10m": "10fg", 
-                            "fi": "z", 
-                            "t": "t", 
-                            "pmsl": "msl", 
-                            "tot_prec": "tp", 
-                            "clct": "tcc", 
-                            "sp": "sp"
+                            "t_2m": "2t", "td_2m": "2d", "vmax_10m": "10fg", "fi": "z", "t": "t", 
+                            "pmsl": "msl", "tot_prec": "tp", "clct": "tcc", "sp": "sp"
                         }.get(key, "2t")
                         ds = xr.open_dataset("temp_ecmwf.grib", engine='cfgrib', filter_by_keys={'shortName': e_k})
                         ds_var = ds[list(ds.data_vars)[0]]
@@ -608,7 +610,6 @@ class PlottingEngine:
     
     @staticmethod
     def plot_temperature(ax, fig, lons, lats, data, param_name):
-        """Kühlt oder heizt: Rendert Temperatur und Taupunkt."""
         val_c = data - 273.15 if data.max() > 100 else data
         label_txt = "Taupunkt in °C" if "Taupunkt" in param_name else "Temperatur in °C"
         cmap = ColormapRegistry.get_temperature()
@@ -618,7 +619,6 @@ class PlottingEngine:
 
     @staticmethod
     def plot_precipitation(ax, fig, lons, lats, data):
-        """Zeichnet Regen und Schnee."""
         cmap, norm = ColormapRegistry.get_precipitation()
         im = ax.pcolormesh(lons, lats, data, cmap=cmap, norm=norm, shading='auto', zorder=5, alpha=0.85)
         ticks_precip = list(range(0, 55, 5)) 
@@ -626,8 +626,7 @@ class PlottingEngine:
 
     @staticmethod
     def plot_wind(ax, fig, lons, lats, data):
-        """Zeichnet Windböen und Sturm."""
-        val_kmh = data * 3.6 if data.max() < 100 else data # Fallback für m/s
+        val_kmh = data * 3.6 if data.max() < 100 else data 
         cmap = ColormapRegistry.get_wind()
         norm = mcolors.Normalize(vmin=0, vmax=150)
         im = ax.pcolormesh(lons, lats, val_kmh, cmap=cmap, norm=norm, shading='auto', zorder=5, alpha=0.85)
@@ -635,21 +634,18 @@ class PlottingEngine:
 
     @staticmethod
     def plot_cape(ax, fig, lons, lats, data):
-        """Zeichnet Konvektive Verfügbare Potentielle Energie (Gewitterpotenzial)."""
         cmap, norm = ColormapRegistry.get_cape()
         im = ax.pcolormesh(lons, lats, data, cmap=cmap, norm=norm, shading='auto', zorder=5, alpha=0.85)
         fig.colorbar(im, ax=ax, label="CAPE (Energie) in J/kg", shrink=0.45, pad=0.03, ticks=[0, 100, 500, 1000, 2000, 3000, 5000])
 
     @staticmethod
     def plot_radar_simulated(ax, fig, lons, lats, data):
-        """Zeichnet simuliertes Radar aus den Modellen (dBZ)."""
         cmap, norm = ColormapRegistry.get_radar()
         im = ax.pcolormesh(lons, lats, data, cmap=cmap, norm=norm, shading='auto', zorder=5, alpha=0.85)
         fig.colorbar(im, ax=ax, label="Simuliertes Radar (Reflektivität in dBZ)", shrink=0.45, pad=0.03, ticks=[0, 15, 30, 45, 60, 75])
 
     @staticmethod
     def plot_clouds(ax, fig, lons, lats, data):
-        """Zeichnet die Gesamtbedeckung."""
         cmap = ColormapRegistry.get_generic_cmap("clouds")
         norm = mcolors.Normalize(vmin=0, vmax=100)
         im = ax.pcolormesh(lons, lats, data, cmap=cmap, norm=norm, shading='auto', zorder=5, alpha=0.85)
@@ -657,7 +653,6 @@ class PlottingEngine:
 
     @staticmethod
     def plot_significant_weather(ax, fig, lons, lats, data):
-        """Wandelt WMO ww-Codes in eine farbige Legende um."""
         cmap_ww, legend_dict = ColormapRegistry.get_significant_weather()
         grid = np.zeros_like(data)
         
@@ -672,14 +667,14 @@ class PlottingEngine:
     @staticmethod
     def plot_rainviewer_radar(ax, fig, host, path, region):
         """
-        Zieht das RainViewer Mosaik in die Karte und erstellt eine
-        erklärende Legende, da die Kacheln bereits farbig vom Server kommen.
+        Plottet das echte Rainviewer Radar.
+        Nutzt die dynamische Zoom-Kalkulation der RegionConfig.
         """
         rv_tiles = RainViewerTiles(host=host, path=path)
-        zoom_l = {"Deutschland": 6, "Brandenburg/Berlin": 8, "Mitteleuropa (DE, PL)": 6, "Europa": 5}
+        zoom = RegionConfig.get_zoom(region)
         
         # Lege das Radar auf die Karte (Zorder=5 liegt über Satellit)
-        ax.add_image(rv_tiles, zoom_l.get(region, 6), zorder=5, alpha=0.85)
+        ax.add_image(rv_tiles, zoom, zorder=5, alpha=0.85)
         
         # Generiere die Legende (colorbar) für das UI
         cmap_radar, norm_radar = ColormapRegistry.get_radar()
@@ -720,7 +715,13 @@ with st.sidebar:
     
     with st.expander("🗺️ 2. Karten-Ausschnitt", expanded=False):
         valid_regions = MODEL_ROUTER[sel_model]["regions"]
-        default_idx = valid_regions.index("Brandenburg/Berlin") if "Brandenburg/Berlin" in valid_regions else 0
+        
+        # Falls Berlin verfügbar ist, mach es bei Radar zum Standard
+        if "Berlin & Umland (Detail-Zoom)" in valid_regions and "Radar" in sel_model:
+            default_idx = valid_regions.index("Berlin & Umland (Detail-Zoom)")
+        else:
+            default_idx = valid_regions.index("Brandenburg (Gesamt)") if "Brandenburg (Gesamt)" in valid_regions else 0
+            
         sel_region = st.radio("Region", valid_regions, index=default_idx, label_visibility="collapsed")
     
     with st.expander("🌪️ 3. Parameter wählen", expanded=True):
@@ -756,7 +757,7 @@ with st.sidebar:
     st.markdown("---")
     
     # OVERLAY STEUERUNG
-    show_sat = st.checkbox("🌍 Satelliten-Hintergrund (Google Maps)", value=True, help="Rendert ein fotorealistisches Bild unter dem Wetter.")
+    show_sat = st.checkbox("🌍 Satelliten-Hintergrund", value=True, help="Rendert Google Maps Satellite unter dem Wetter.")
     show_isobars = st.checkbox("Isobaren (Luftdruck) einblenden", value=True)
     show_storms = st.checkbox("⚡ Gewitter-Risiko rot schraffieren", value=True)
     
@@ -805,20 +806,19 @@ if generate or (enable_refresh and "Radar" in sel_model):
             # Karte und Projektion initialisieren
             fig, ax = plt.subplots(figsize=(9, 11), subplot_kw={'projection': ccrs.PlateCarree()}, dpi=150)
             
-            # Kartenausschnitt setzen
-            current_extent = EXTENTS[sel_region]
-            ax.set_extent(current_extent)
+            # KARTENAUSSCHNITT SETZEN (DER FATALE ZOOM-FEHLER WURDE HIER BEHOBEN)
+            current_extent = RegionConfig.get_extent(sel_region)
+            # Das Hinzufügen von crs=ccrs.PlateCarree() zwingt Cartopy, die Box korrekt zu schneiden!
+            ax.set_extent(current_extent, crs=ccrs.PlateCarree())
 
             # SATELLITEN BILD SCHICHT (Zorder=0)
             if show_sat:
-                # Nutzt die fehlerfreie Google Maps Methode
                 sat_tiles = GoogleSatelliteTiles()
-                # Dynamischer Zoom: Brandenburg braucht mehr Zoom als Europa
-                zoom_l = {"Deutschland": 6, "Brandenburg/Berlin": 8, "Mitteleuropa (DE, PL)": 6, "Alpenraum": 7, "Europa": 5}
-                ax.add_image(sat_tiles, zoom_l.get(sel_region, 6), zorder=0)
+                # Lädt den perfekten Zoomlevel für die Region aus der Config-Klasse
+                zoom = RegionConfig.get_zoom(sel_region)
+                ax.add_image(sat_tiles, zoom, zorder=0)
 
             # Poltische Grenzen zeichnen
-            # Weiße Linien auf Satellit, Schwarze Linien auf normalem Hintergrund
             border_color = 'white' if show_sat else 'black'
             ax.add_feature(cfeature.COASTLINE, linewidth=0.9, edgecolor=border_color, zorder=12)
             ax.add_feature(cfeature.BORDERS, linewidth=0.9, edgecolor=border_color, zorder=12)
@@ -857,6 +857,9 @@ if generate or (enable_refresh and "Radar" in sel_model):
                 val_hpa = data / 100 if data.max() > 5000 else data
                 im = ax.pcolormesh(lons, lats, val_hpa, cmap='jet', shading='auto', alpha=0.85, zorder=5)
                 fig.colorbar(im, ax=ax, label="Bodendruck in hPa", shrink=0.45, pad=0.03)
+                # Isobaren als Konturlinien zeichnen!
+                cs = ax.contour(lons, lats, val_hpa, colors='black', linewidths=0.8, levels=np.arange(940, 1060, 4), zorder=15)
+                ax.clabel(cs, inline=True, fontsize=8, fmt='%1.0f')
                 
             else:
                 # Generischer Fallback Plotter für alle übrigen Parameter
@@ -925,4 +928,3 @@ if generate or (enable_refresh and "Radar" in sel_model):
     else:
         st.error(f"⚠️ Aktuell liefert der gewählte Server keine Daten für '{sel_param}'.")
         st.info("💡 Server-Delay: Der DWD-Lauf ist vermutlich noch im Upload. Versuche es in 5 Minuten noch einmal.")
-
