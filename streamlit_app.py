@@ -21,12 +21,14 @@ import time
 # ==============================================================================
 # 1. SETUP, KONFIGURATION & AGGRESSIVES CACHE-MANAGEMENT
 # ==============================================================================
-# Optionale Autorefresh-Logik für das Live-Radar
+# Optionale Autorefresh-Logik für das Live-Radar. 
+# Wenn die Bibliothek nicht installiert ist, läuft die App normal weiter.
 try:
     from streamlit_autorefresh import st_autorefresh
 except ImportError:
     st_autorefresh = None
 
+# Streamlit Page Config: Breitbild-Modus für große Wetterkarten
 st.set_page_config(
     page_title="WarnwetterBB | Pro-Zentrale", 
     layout="wide", 
@@ -36,8 +38,9 @@ st.set_page_config(
 def cleanup_temp_files():
     """
     Räumt temporäre Dateien auf, die beim Herunterladen und Entpacken 
-    der GRIB-Daten entstehen. Dies verhindert, dass der Container auf 
-    Streamlit Cloud nach einigen Tagen wegen Speichermangel abstürzt.
+    der GRIB-Daten entstehen. Dies ist zwingend notwendig, da Cloud-Umgebungen 
+    (wie Streamlit Community Cloud oder Heroku) sehr restriktiv mit dem 
+    Speicherplatz umgehen. Bleiben diese Dateien liegen, stürzt der Container ab.
     """
     temp_files = [
         "temp.grib", 
@@ -51,26 +54,73 @@ def cleanup_temp_files():
             try: 
                 os.remove(file)
             except Exception: 
+                # Falls eine Datei vom System blockiert wird, ignorieren wir den Fehler.
                 pass
 
+# Definition der lokalen Zeitzone für korrekte Darstellungen auf der Karte
 LOCAL_TZ = ZoneInfo("Europe/Berlin")
-WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+
+# Definition der Wochentage für die übersichtliche Zeitauswahl in der Sidebar
+WOCHENTAGE = [
+    "Mo", 
+    "Di", 
+    "Mi", 
+    "Do", 
+    "Fr", 
+    "Sa", 
+    "So"
+]
 
 # ==============================================================================
-# 2. MASTER-FARBSKALEN (DIESE BLEIBEN EXAKT WIE VORGEGEBEN)
+# 2. ERWEITERTE SATELLITEN-ENGINE (ESRI WORLD IMAGERY)
+# ==============================================================================
+class EsriImagery(cimgt.GoogleWTS):
+    """
+    Diese Klasse überschreibt das Standard-Verhalten von Cartopy, um hochauflösende 
+    Satellitenbilder von ArcGIS (Esri) abzugreifen. Diese Bilder sind farbecht 
+    und eignen sich perfekt als fotografischer Hintergrund für Radar-Echos.
+    Das behebt das Problem der "schwarzen" oder "leeren" Hintergründe.
+    """
+    def _image_url(self, tile):
+        x, y, z = tile
+        # Die ArcGIS World Imagery REST API liefert Kacheln im Standard Google-Format
+        url = f'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}.jpg'
+        return url
+
+# ==============================================================================
+# 3. MASTER-FARBSKALEN & METEOROLOGISCHE GRENZWERTE
 # ==============================================================================
 
+# ------------------------------------------------------------------------------
 # Temperatur-Farbskala (-30 bis +30 Grad Celsius)
+# ------------------------------------------------------------------------------
 temp_colors = [
-    (0.0, '#D3D3D3'), (5/60, '#FFFFFF'), (10/60, '#FFC0CB'), (15/60, '#FF00FF'),
-    (20/60, '#800080'), (20.01/60, '#00008B'), (25/60, '#0000CD'), (29.99/60, '#ADD8E6'),
-    (30/60, '#006400'), (35/60, '#008000'), (39/60, '#90EE90'), (39.99/60, '#90EE90'),
-    (40/60, '#FFFF00'), (45/60, '#FFA500'), (50/60, '#FF0000'), (55/60, '#8B0000'), (60/60, '#800080')
+    (0.0, '#D3D3D3'), 
+    (5/60, '#FFFFFF'), 
+    (10/60, '#FFC0CB'), 
+    (15/60, '#FF00FF'),
+    (20/60, '#800080'), 
+    (20.01/60, '#00008B'), 
+    (25/60, '#0000CD'), 
+    (29.99/60, '#ADD8E6'),
+    (30/60, '#006400'), 
+    (35/60, '#008000'), 
+    (39/60, '#90EE90'), 
+    (39.99/60, '#90EE90'),
+    (40/60, '#FFFF00'), 
+    (45/60, '#FFA500'), 
+    (50/60, '#FF0000'), 
+    (55/60, '#8B0000'), 
+    (60/60, '#800080')
 ]
 cmap_temp = mcolors.LinearSegmentedColormap.from_list("custom_temp", temp_colors)
 
-# Präzise Niederschlags-Farbskala
-precip_values = [0, 0.2, 0.5, 1.0, 1.5, 2.0, 3, 4, 5, 8, 12, 15, 20, 30, 40, 50]
+# ------------------------------------------------------------------------------
+# Präzise Niederschlags-Farbskala (Abgestimmt auf DWD-Standards)
+# ------------------------------------------------------------------------------
+precip_values = [
+    0, 0.2, 0.5, 1.0, 1.5, 2.0, 3, 4, 5, 8, 12, 15, 20, 30, 40, 50
+]
 precip_colors = [
     '#FFFFFF', '#87CEEB', '#1E90FF', '#191970', '#006400', '#32CD32', '#FFFF00', 
     '#FFA500', '#FF0000', '#8B0000', '#800000', '#4B0082', '#800080', '#9400D3', 
@@ -81,8 +131,12 @@ precip_anchors = [v / vmax_precip for v in precip_values]
 cmap_precip = mcolors.LinearSegmentedColormap.from_list("custom_precip", list(zip(precip_anchors, precip_colors)))
 norm_precip = mcolors.Normalize(vmin=0, vmax=vmax_precip)
 
-# Aviation Flugsicherheits-Skala (Wolkenuntergrenze)
-base_levels = [0, 100, 200, 300, 400, 500, 750, 1000, 1500, 2000, 3000, 8000]
+# ------------------------------------------------------------------------------
+# Aviation Flugsicherheits-Skala (Wolkenuntergrenze in Fuß/Meter)
+# ------------------------------------------------------------------------------
+base_levels = [
+    0, 100, 200, 300, 400, 500, 750, 1000, 1500, 2000, 3000, 8000
+]
 base_colors = [
     '#FF00FF', '#FF0000', '#FFA500', '#FFFF00', '#ADFF2F', '#32CD32', '#00BFFF', 
     '#1E90FF', '#0000FF', '#A9A9A9', '#FFFFFF'
@@ -90,8 +144,12 @@ base_colors = [
 cmap_base = mcolors.ListedColormap(base_colors)
 norm_base = mcolors.BoundaryNorm(base_levels, cmap_base.N)
 
-# CAPE-Skala (Konvektive verfügbare potentielle Energie)
-cape_levels = [0, 25, 50, 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 10000]
+# ------------------------------------------------------------------------------
+# CAPE-Skala (Konvektive verfügbare potentielle Energie) - Gewitter-Indikator
+# ------------------------------------------------------------------------------
+cape_levels = [
+    0, 25, 50, 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 10000
+]
 cape_colors = [
     '#006400', '#2E8B57', '#ADFF2F', '#FFFF00', '#FFB347', '#FFA500', 
     '#FF4500', '#FF0000', '#8B0000', '#800080', '#FF00FF', '#FFFFFF', '#808080', '#404040'
@@ -99,96 +157,269 @@ cape_colors = [
 cmap_cape = mcolors.ListedColormap(cape_colors)
 norm_cape = mcolors.BoundaryNorm(cape_levels, cmap_cape.N)
 
-# RADAR-Reflektivität (dBZ)
-radar_levels = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80]
+# ------------------------------------------------------------------------------
+# RADAR-Reflektivität (dBZ) für Echtzeit- und Simuliertes Radar
+# ------------------------------------------------------------------------------
+radar_levels = [
+    0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80
+]
 radar_colors = [
     '#FFFFFF', '#B0E0E6', '#00BFFF', '#0000FF', '#00FF00', '#32CD32', '#008000', 
     '#FFFF00', '#FFA500', '#FF0000', '#8B0000', '#FF00FF', '#800080', '#4B0082', '#E6E6FA'
 ]
 cmap_radar = mcolors.ListedColormap(radar_colors)
+# WICHTIGER FIX: Wir weisen "schlechte" Werte (NaN, also Gebiete ohne Regen) 
+# explizit als transparent zu. So scheint das Satellitenbild durch!
+cmap_radar.set_bad(color='black', alpha=0.0)
 norm_radar = mcolors.BoundaryNorm(radar_levels, cmap_radar.N)
 
+# ------------------------------------------------------------------------------
 # Weitere Hilfsskalen (Feuchte, Wolken, Wind etc.)
+# ------------------------------------------------------------------------------
 cmap_cin = mcolors.LinearSegmentedColormap.from_list("cin", ['#FFFFFF', '#ADD8E6', '#0000FF', '#00008B', '#000000'], N=256)
 cmap_clouds = mcolors.LinearSegmentedColormap.from_list("clouds", ['#1E90FF', '#87CEEB', '#D3D3D3', '#FFFFFF'], N=256)
 cmap_relhum = mcolors.LinearSegmentedColormap.from_list("relhum", ['#8B4513', '#F4A460', '#FFFFE0', '#90EE90', '#008000', '#0000FF'], N=256)
 cmap_snow = mcolors.LinearSegmentedColormap.from_list("snow", ['#CCFFCC', '#FFFFFF', '#ADD8E6', '#0000FF', '#800080'], N=256)
 cmap_vis = mcolors.LinearSegmentedColormap.from_list("vis", ['#FFFFFF', '#D3D3D3', '#87CEEB', '#1E90FF'], N=256)
-W_COLORS = ['#ADD8E6', '#0000FF', '#008000', '#FFFF00', '#FFD700', '#FFA500', '#FF0000', '#8B0000', '#800080', '#4B0082']
+
+W_COLORS = [
+    '#ADD8E6', '#0000FF', '#008000', '#FFFF00', '#FFD700', 
+    '#FFA500', '#FF0000', '#8B0000', '#800080', '#4B0082'
+]
 cmap_wind = mcolors.LinearSegmentedColormap.from_list("wind", W_COLORS, N=256)
 cmap_heli = mcolors.LinearSegmentedColormap.from_list("heli", ['#FFFFFF', '#00FF00', '#FFFF00', '#FF0000', '#800080', '#000000'], N=256)
 cmap_lifted = mcolors.LinearSegmentedColormap.from_list("lifted", ['#FF00FF', '#FF0000', '#FFA500', '#FFFF00', '#00FF00', '#0000FF'], N=256)
 cmap_sun = mcolors.LinearSegmentedColormap.from_list("sun", ['#808080', '#FFD700', '#FFA500', '#FF8C00'], N=256)
 
+# ------------------------------------------------------------------------------
 # Signifikantes Wetter (ww-Codes) - Legenden-Zuweisung
+# ------------------------------------------------------------------------------
 WW_LEGEND_DATA = {
-    "Nebel": ("#FFFF00", list(range(40, 50))),
-    "Regen leicht": ("#00FF00", [50, 51, 58, 60, 80]),
-    "Regen mäßig": ("#228B22", [53, 61, 62, 81]),
-    "Regen stark": ("#006400", [54, 55, 63, 64, 65, 82]),
-    "gefr. Regen leicht": ("#FF7F7F", [56, 66]),
-    "gefr. Regen mäßig/stark": ("#FF0000", [57, 67]),
-    "Schneeregen leicht": ("#FFB347", [68, 83]),
-    "Schneeregen mäßig/stark": ("#FFA500", [69, 84]),
-    "Schnee leicht": ("#87CEEB", [70, 71, 85]),
-    "Schnee mäßig": ("#0000FF", [72, 73, 86]),
-    "Schnee stark": ("#00008B", [74, 75, 76, 77, 78, 79, 87, 88]),
-    "Gewitter leicht": ("#FF00FF", [95]),
-    "Gewitter mäßig/stark": ("#800080", [96, 97, 99])
+    "Nebel": (
+        "#FFFF00", 
+        list(range(40, 50))
+    ),
+    "Regen leicht": (
+        "#00FF00", 
+        [50, 51, 58, 60, 80]
+    ),
+    "Regen mäßig": (
+        "#228B22", 
+        [53, 61, 62, 81]
+    ),
+    "Regen stark": (
+        "#006400", 
+        [54, 55, 63, 64, 65, 82]
+    ),
+    "gefr. Regen leicht": (
+        "#FF7F7F", 
+        [56, 66]
+    ),
+    "gefr. Regen mäßig/stark": (
+        "#FF0000", 
+        [57, 67]
+    ),
+    "Schneeregen leicht": (
+        "#FFB347", 
+        [68, 83]
+    ),
+    "Schneeregen mäßig/stark": (
+        "#FFA500", 
+        [69, 84]
+    ),
+    "Schnee leicht": (
+        "#87CEEB", 
+        [70, 71, 85]
+    ),
+    "Schnee mäßig": (
+        "#0000FF", 
+        [72, 73, 86]
+    ),
+    "Schnee stark": (
+        "#00008B", 
+        [74, 75, 76, 77, 78, 79, 87, 88]
+    ),
+    "Gewitter leicht": (
+        "#FF00FF", 
+        [95]
+    ),
+    "Gewitter mäßig/stark": (
+        "#800080", 
+        [96, 97, 99]
+    )
 }
-# Transparenter Hintergrund plus die definierten Farben
+# Initialisierung der ww-Colormap mit transparentem Basis-Hintergrund (#FFFFFF00)
 cmap_ww = mcolors.ListedColormap(['#FFFFFF00'] + [c for l, (c, codes) in WW_LEGEND_DATA.items()])
 
+
 # ==============================================================================
-# 3. DAS EISERNE ROUTING-SYSTEM (INKL. RADAR WEICHEN)
+# 4. DAS EISERNE ROUTING-SYSTEM (INKL. RADAR WEICHEN)
+# Vertikal expandiert für maximale Lesbarkeit und Wartbarkeit.
 # ==============================================================================
 MODEL_ROUTER = {
     "RainViewer Echtzeit-Radar": {
-        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Europa"],
-        "params": ["Echtzeit-Radar (Reflektivität)"]
+        "regions": [
+            "Deutschland", 
+            "Brandenburg/Berlin", 
+            "Mitteleuropa (DE, PL)", 
+            "Europa"
+        ],
+        "params": [
+            "Echtzeit-Radar (Reflektivität)"
+        ]
     },
     "DWD Echtzeit-Radar (Rohdaten)": {
-        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)"],
-        "params": ["Echtzeit-Radar (Reflektivität)"]
+        "regions": [
+            "Deutschland", 
+            "Brandenburg/Berlin", 
+            "Mitteleuropa (DE, PL)"
+        ],
+        "params": [
+            "Echtzeit-Radar (Reflektivität)"
+        ]
     },
     "ICON-D2": {
-        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum"],
-        "params": ["Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
-                   "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "CAPE (J/kg)", 
-                   "CIN (J/kg)", "Gesamtbedeckung (%)", "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)",
-                   "Signifikantes Wetter", "Sichtweite (m)", "Wolkenuntergrenze (m)", "Wolkenobergrenze (m)", 
-                   "Spezifische Feuchte (g/kg)", "Simuliertes Radar (dBZ)", "Helizität / SRH (m²/s²)", 
-                   "Sonnenscheindauer (Min)"]
+        "regions": [
+            "Deutschland", 
+            "Brandenburg/Berlin", 
+            "Mitteleuropa (DE, PL)", 
+            "Alpenraum"
+        ],
+        "params": [
+            "Temperatur 2m (°C)", 
+            "Taupunkt 2m (°C)", 
+            "Windböen (km/h)", 
+            "Bodendruck (hPa)", 
+            "500 hPa Geopot. Höhe", 
+            "850 hPa Temp.", 
+            "Niederschlag (mm)", 
+            "CAPE (J/kg)", 
+            "CIN (J/kg)", 
+            "Gesamtbedeckung (%)", 
+            "Rel. Feuchte 700 hPa (%)", 
+            "Schneehöhe (cm)",
+            "Signifikantes Wetter", 
+            "Sichtweite (m)", 
+            "Wolkenuntergrenze (m)", 
+            "Wolkenobergrenze (m)", 
+            "Spezifische Feuchte (g/kg)", 
+            "Simuliertes Radar (dBZ)", 
+            "Helizität / SRH (m²/s²)", 
+            "Sonnenscheindauer (Min)"
+        ]
     },
     "ICON-EU": {
-        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"],
-        "params": ["Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
-                   "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "CAPE (J/kg)", 
-                   "CIN (J/kg)", "Gesamtbedeckung (%)", "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)",
-                   "Signifikantes Wetter", "Sichtweite (m)", "Wolkenuntergrenze (m)", "Wolkenobergrenze (m)"]
+        "regions": [
+            "Deutschland", 
+            "Brandenburg/Berlin", 
+            "Mitteleuropa (DE, PL)", 
+            "Alpenraum", 
+            "Europa"
+        ],
+        "params": [
+            "Temperatur 2m (°C)", 
+            "Taupunkt 2m (°C)", 
+            "Windböen (km/h)", 
+            "Bodendruck (hPa)", 
+            "500 hPa Geopot. Höhe", 
+            "850 hPa Temp.", 
+            "Niederschlag (mm)", 
+            "CAPE (J/kg)", 
+            "CIN (J/kg)", 
+            "Gesamtbedeckung (%)", 
+            "Rel. Feuchte 700 hPa (%)", 
+            "Schneehöhe (cm)",
+            "Signifikantes Wetter", 
+            "Sichtweite (m)", 
+            "Wolkenuntergrenze (m)", 
+            "Wolkenobergrenze (m)"
+        ]
     },
     "ICON (Global)": {
-        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"],
-        "params": ["Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
-                   "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "CAPE (J/kg)", 
-                   "CIN (J/kg)", "Gesamtbedeckung (%)", "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)"]
+        "regions": [
+            "Deutschland", 
+            "Brandenburg/Berlin", 
+            "Mitteleuropa (DE, PL)", 
+            "Alpenraum", 
+            "Europa"
+        ],
+        "params": [
+            "Temperatur 2m (°C)", 
+            "Taupunkt 2m (°C)", 
+            "Windböen (km/h)", 
+            "Bodendruck (hPa)", 
+            "500 hPa Geopot. Höhe", 
+            "850 hPa Temp.", 
+            "Niederschlag (mm)", 
+            "CAPE (J/kg)", 
+            "CIN (J/kg)", 
+            "Gesamtbedeckung (%)", 
+            "Rel. Feuchte 700 hPa (%)", 
+            "Schneehöhe (cm)"
+        ]
     },
     "GFS (NOAA)": {
-        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"],
-        "params": ["Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
-                   "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "CAPE (J/kg)", 
-                   "CIN (J/kg)", "Gesamtbedeckung (%)", "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)",
-                   "0-Grad-Grenze (m)", "Lifted Index (K)", "Sichtweite (m)", "Wolkenuntergrenze (m)"]
+        "regions": [
+            "Deutschland", 
+            "Brandenburg/Berlin", 
+            "Mitteleuropa (DE, PL)", 
+            "Alpenraum", 
+            "Europa"
+        ],
+        "params": [
+            "Temperatur 2m (°C)", 
+            "Taupunkt 2m (°C)", 
+            "Windböen (km/h)", 
+            "Bodendruck (hPa)", 
+            "500 hPa Geopot. Höhe", 
+            "850 hPa Temp.", 
+            "Niederschlag (mm)", 
+            "CAPE (J/kg)", 
+            "CIN (J/kg)", 
+            "Gesamtbedeckung (%)", 
+            "Rel. Feuchte 700 hPa (%)", 
+            "Schneehöhe (cm)",
+            "0-Grad-Grenze (m)", 
+            "Lifted Index (K)", 
+            "Sichtweite (m)", 
+            "Wolkenuntergrenze (m)"
+        ]
     },
     "ECMWF": {
-        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"],
-        "params": ["Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
-                   "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "Gesamtbedeckung (%)"] 
+        "regions": [
+            "Deutschland", 
+            "Brandenburg/Berlin", 
+            "Mitteleuropa (DE, PL)", 
+            "Alpenraum", 
+            "Europa"
+        ],
+        "params": [
+            "Temperatur 2m (°C)", 
+            "Taupunkt 2m (°C)", 
+            "Windböen (km/h)", 
+            "Bodendruck (hPa)", 
+            "500 hPa Geopot. Höhe", 
+            "850 hPa Temp.", 
+            "Niederschlag (mm)", 
+            "Gesamtbedeckung (%)"
+        ] 
     },
     "ECMWF-AIFS (KI-Modell)": {
-        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"],
-        "params": ["Temperatur 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
-                   "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)"]
+        "regions": [
+            "Deutschland", 
+            "Brandenburg/Berlin", 
+            "Mitteleuropa (DE, PL)", 
+            "Alpenraum", 
+            "Europa"
+        ],
+        "params": [
+            "Temperatur 2m (°C)", 
+            "Windböen (km/h)", 
+            "Bodendruck (hPa)", 
+            "500 hPa Geopot. Höhe", 
+            "850 hPa Temp.", 
+            "Niederschlag (mm)"
+        ]
     }
 }
 
@@ -198,21 +429,31 @@ def estimate_latest_run(model, now_utc):
     festen Taktungen der Wettermodelle, um 404-Fehler zu minimieren.
     """
     if "D2" in model or "EU" in model:
+        # DWD rechnet alle 3 Stunden. Delay beträgt typischerweise ~2 Stunden.
         run_h = ((now_utc.hour - 3) // 3) * 3
-        if run_h < 0: return (now_utc - timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0)
+        if run_h < 0: 
+            return (now_utc - timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0)
         return now_utc.replace(hour=run_h, minute=0, second=0, microsecond=0)
+        
     elif "GFS" in model or "Global" in model:
+        # GFS und ICON Global rechnen alle 6 Stunden. 
         run_h = ((now_utc.hour - 6) // 6) * 6
-        if run_h < 0: return (now_utc - timedelta(days=1)).replace(hour=18, minute=0, second=0, microsecond=0)
+        if run_h < 0: 
+            return (now_utc - timedelta(days=1)).replace(hour=18, minute=0, second=0, microsecond=0)
         return now_utc.replace(hour=run_h, minute=0, second=0, microsecond=0)
+        
     elif "ECMWF" in model:
+        # ECMWF rechnet primär 00Z und 12Z.
         run_h = ((now_utc.hour - 10) // 12) * 12
-        if run_h < 0: return (now_utc - timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
+        if run_h < 0: 
+            return (now_utc - timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
         return now_utc.replace(hour=run_h, minute=0, second=0, microsecond=0)
+        
     return now_utc
 
+
 # ==============================================================================
-# 4. RADAR ENGINE: RAINVIEWER (API) & DWD (BINÄR-FIX)
+# 5. RADAR ENGINE: RAINVIEWER (API) & DWD (BINÄR-FIX)
 # ==============================================================================
 class RainViewerTiles(cimgt.GoogleWTS):
     """
@@ -226,8 +467,9 @@ class RainViewerTiles(cimgt.GoogleWTS):
         super().__init__()
 
     def _image_url(self, tile):
+        """Generiert die spezifische URL für eine Kartenkachel (Z/X/Y)"""
         x, y, z = tile
-        # Farbschema 2 (Meteo), Glättung 1, Schneefallunterscheidung 1
+        # 2 = Meteo Farbschema, 1_1.png = Smooth + Snow Unterscheidung
         url = f"{self.host}{self.path}/256/{z}/{x}/{y}/2/1_1.png"
         return url
 
@@ -249,9 +491,11 @@ def fetch_rainviewer_metadata():
             latest_scan = past_radar[-1]
             logs.append(f"RainViewer Pfad gefunden: {latest_scan['path']}")
             return host, latest_scan["path"], str(latest_scan["time"]), logs
+            
     except Exception as e:
         logs.append(f"RainViewer Fehler: {str(e)}")
         return None, None, None, logs
+        
     return None, None, None, logs
 
 def fetch_dwd_radar_raw(debug=False):
@@ -267,7 +511,7 @@ def fetch_dwd_radar_raw(debug=False):
         r_list = requests.get(url_base, timeout=10)
         r_list.raise_for_status()
         
-        # Regex-Suche nach dem WN-Produkt Format
+        # Regex-Suche nach dem WN-Produkt Format (Echtzeit Niederschlagsradar Deutschland)
         files = re.findall(r'href="(raa01-wn_10000-[0-9]{10}-dwd---bin\.gz)"', r_list.text)
         if not files: 
             return None, None, None, None, logs
@@ -279,6 +523,7 @@ def fetch_dwd_radar_raw(debug=False):
             logs.append(f"Versuche Download: {file_url}")
             
             r = requests.get(file_url, timeout=15)
+            # Eine gültige DWD-Radardatei hat mehr als 1000 Bytes
             if r.status_code == 200 and len(r.content) > 1000:
                 with gzip.open(io.BytesIO(r.content), 'rb') as f:
                     content = f.read()
@@ -291,14 +536,14 @@ def fetch_dwd_radar_raw(debug=False):
                         # Alles nach \x03 sind die eigentlichen Radardaten
                         raw_data = np.frombuffer(content[header_end+1:], dtype=np.uint8)
                         
-                        # Absicherung der Array-Länge
+                        # Absicherung der Array-Länge (900 * 900 = 810.000)
                         if len(raw_data) >= 810000:
                             data_2d = raw_data[:810000].reshape(900, 900).astype(float)
                             
-                            # Umrechnung in dBZ
+                            # Umrechnung in dBZ gemäß DWD Spezifikation
                             data_dbz = (data_2d - 64) / 2.0
                             
-                            # Werte unter Null sind Rauschen/Clutter und werden genulled
+                            # Werte unter Null sind Rauschen/Clutter und werden als NaN (transparent) markiert
                             data_dbz[data_dbz < 0] = np.nan
                             
                             # Generiere das DWD-Referenz-Koordinatengitter
@@ -311,7 +556,7 @@ def fetch_dwd_radar_raw(debug=False):
                             ts = ts_match.group(1) if ts_match else datetime.now().strftime("%y%m%d%H%M")
                             
                             logs.append("DWD Radar erfolgreich decodiert.")
-                            # Matrix muss gespiegelt werden für korrekte N-S Ausrichtung
+                            # Matrix muss gespiegelt werden für korrekte N-S Ausrichtung auf der Karte
                             return data_dbz[::-1], lons, lats, ts, logs
             else:
                 logs.append(f"Datei fehlerhaft oder noch im Schreibprozess (Status {r.status_code})")
@@ -322,7 +567,7 @@ def fetch_dwd_radar_raw(debug=False):
     return None, None, None, None, logs
 
 # ==============================================================================
-# 5. DYNAMISCHE SIDEBAR INKL. AUTO-REFRESH
+# 6. DYNAMISCHE SIDEBAR INKL. AUTO-REFRESH
 # ==============================================================================
 with st.sidebar:
     st.header("🛰️ Modell-Zentrale")
@@ -372,7 +617,7 @@ with st.sidebar:
     
     # Auto-Update Schalter exklusiv für das Radar
     st.markdown("---")
-    enable_refresh = st.checkbox("🔄 Auto-Update (5 Min.)", value=False, help="Die Karte aktualisiert sich selbst alle 300 Sekunden. Ideal für dauerhafte Überwachung.")
+    enable_refresh = st.checkbox("🔄 Auto-Update (5 Min.)", value=False, help="Die Karte aktualisiert sich selbst alle 300 Sekunden. Ideal für dauerhafte Überwachung am Desktop.")
     if enable_refresh and st_autorefresh is not None:
         st_autorefresh(interval=300000, key="auto_refresh_radar")
         
@@ -380,16 +625,17 @@ with st.sidebar:
     generate = st.button("🚀 Profi-Karte generieren", use_container_width=True)
     
     with st.expander("🛠️ Entwickler-Konsole"):
-        debug_mode = st.checkbox("URL-Ping aktivieren", help="Zeigt interne Request-Pfade zur Fehlerbehebung an.")
+        debug_mode = st.checkbox("URL-Ping aktivieren", help="Zeigt interne Request-Pfade und Parse-Logs zur Fehlerbehebung an.")
 
 # ==============================================================================
-# 6. DATA FETCH ENGINE (PROGNOSEMODELLE)
+# 7. DATA FETCH ENGINE (PROGNOSEMODELLE)
 # ==============================================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_meteo_data(model, param, hr, debug=False):
     """
     Der Kern der App: Lädt GRIB2-Daten von DWD/NOAA/ECMWF herunter und parst sie 
-    mit xarray/cfgrib. Fängt über eine Weiche auch Radar-Aufrufe ab.
+    mit xarray/cfgrib. Fängt über eine Weiche auch die Radar-Aufrufe sicher ab.
+    Gibt die geparsten Matrizen, Koordinaten und Run-IDs zurück.
     """
     # ---------------------------------------------------------
     # RADAR-ABFANGJÄGER LOGIK
@@ -408,15 +654,31 @@ def fetch_meteo_data(model, param, hr, debug=False):
     # ---------------------------------------------------------
     dyn_cloud_base = "ceiling" if "D2" in model else "hbas_con"
     
+    # Mapping von lesbaren Parametern auf die GRIB2 ShortNames
     p_map = {
-        "Temperatur 2m (°C)": "t_2m", "Taupunkt 2m (°C)": "td_2m", "Windböen (km/h)": "vmax_10m", 
-        "Bodendruck (hPa)": "sp", "500 hPa Geopot. Höhe": "fi", "850 hPa Temp.": "t", 
-        "Signifikantes Wetter": "ww", "Isobaren": "pmsl", "CAPE (J/kg)": "cape_ml", 
-        "CIN (J/kg)": "cin_ml", "Niederschlag (mm)": "tot_prec", "Simuliertes Radar (dBZ)": "dbz_cmax",
-        "0-Grad-Grenze (m)": "hgt_0c", "Gesamtbedeckung (%)": "clct", "Rel. Feuchte 700 hPa (%)": "relhum", 
-        "Schneehöhe (cm)": "h_snow", "Sichtweite (m)": "vis", "Wolkenuntergrenze (m)": dyn_cloud_base,
-        "Wolkenobergrenze (m)": "htop_con", "Spezifische Feuchte (g/kg)": "qv",
-        "Helizität / SRH (m²/s²)": "uh_max", "Sonnenscheindauer (Min)": "dur_sun", "Lifted Index (K)": "sli"
+        "Temperatur 2m (°C)": "t_2m", 
+        "Taupunkt 2m (°C)": "td_2m", 
+        "Windböen (km/h)": "vmax_10m", 
+        "Bodendruck (hPa)": "sp", 
+        "500 hPa Geopot. Höhe": "fi", 
+        "850 hPa Temp.": "t", 
+        "Signifikantes Wetter": "ww", 
+        "Isobaren": "pmsl", 
+        "CAPE (J/kg)": "cape_ml", 
+        "CIN (J/kg)": "cin_ml", 
+        "Niederschlag (mm)": "tot_prec", 
+        "Simuliertes Radar (dBZ)": "dbz_cmax",
+        "0-Grad-Grenze (m)": "hgt_0c", 
+        "Gesamtbedeckung (%)": "clct", 
+        "Rel. Feuchte 700 hPa (%)": "relhum", 
+        "Schneehöhe (cm)": "h_snow", 
+        "Sichtweite (m)": "vis", 
+        "Wolkenuntergrenze (m)": dyn_cloud_base,
+        "Wolkenobergrenze (m)": "htop_con", 
+        "Spezifische Feuchte (g/kg)": "qv",
+        "Helizität / SRH (m²/s²)": "uh_max", 
+        "Sonnenscheindauer (Min)": "dur_sun", 
+        "Lifted Index (K)": "sli"
     }
     
     key = p_map.get(param, "t_2m")
@@ -426,21 +688,29 @@ def fetch_meteo_data(model, param, hr, debug=False):
 
     if "ICON" in model:
         is_global = "Global" in model
-        if is_global: m_dir, reg_str = "icon", "icon_global"
-        elif "D2" in model: m_dir, reg_str = "icon-d2", "icon-d2_germany"
-        else: m_dir, reg_str = "icon-eu", "icon-eu_europe"
+        if is_global: 
+            m_dir, reg_str = "icon", "icon_global"
+        elif "D2" in model: 
+            m_dir, reg_str = "icon-d2", "icon-d2_germany"
+        else: 
+            m_dir, reg_str = "icon-eu", "icon-eu_europe"
         
-        # Iteriere rückwärts durch die Stunden, um den frischesten verfügbaren Lauf zu finden
+        # Iteriere rückwärts durch die Stunden, um den frischesten verfügbaren Lauf zu finden.
+        # Fallback-System bei Verzögerungen des DWD-Servers.
         for off in range(1, 18):
             t = now - timedelta(hours=off)
-            if is_global: run = (t.hour // 6) * 6
-            else: run = (t.hour // 3) * 3
+            if is_global: 
+                run = (t.hour // 6) * 6
+            else: 
+                run = (t.hour // 3) * 3
             
             dt_s = t.replace(hour=run, minute=0, second=0, microsecond=0).strftime("%Y%m%d%H")
             
             l_type = "pressure-level" if key in ["fi", "t", "relhum", "qv"] else "single-level"
-            if l_type == "pressure-level": lvl_str = f"{'500' if '500' in param else '700' if '700' in param else '850'}_"
-            else: lvl_str = "2d_"
+            if l_type == "pressure-level": 
+                lvl_str = f"{'500' if '500' in param else '700' if '700' in param else '850'}_"
+            else: 
+                lvl_str = "2d_"
             
             url = f"https://opendata.dwd.de/weather/nwp/{m_dir}/grib/{run:02d}/{key}/{reg_str}_regular-lat-lon_{l_type}_{dt_s}_{hr:03d}_{lvl_str}{key}.grib2.bz2"
             debug_logs.append(url)
@@ -449,30 +719,44 @@ def fetch_meteo_data(model, param, hr, debug=False):
                 r = requests.get(url, timeout=5)
                 if r.status_code == 200:
                     with bz2.open(io.BytesIO(r.content)) as f_bz2:
-                        with open("temp.grib", "wb") as f_out: f_out.write(f_bz2.read())
+                        with open("temp.grib", "wb") as f_out: 
+                            f_out.write(f_bz2.read())
                     ds = xr.open_dataset("temp.grib", engine='cfgrib')
                     ds_var = ds[list(ds.data_vars)[0]]
+                    
                     if 'isobaricInhPa' in ds_var.dims:
                         target_p = 500 if "500" in param else 700 if "700" in param else 850
                         ds_var = ds_var.sel(isobaricInhPa=target_p)
+                        
                     data = ds_var.isel(step=0, height=0, missing_dims='ignore').values.squeeze()
                     lons, lats = ds.longitude.values, ds.latitude.values
-                    if lons.ndim == 1: lons, lats = np.meshgrid(lons, lats)
+                    if lons.ndim == 1: 
+                        lons, lats = np.meshgrid(lons, lats)
+                        
                     return data, lons, lats, dt_s, debug_logs
             except Exception as e: 
                 debug_logs.append(f"GRIB-Parse Error: {str(e)}")
                 continue
 
     elif "GFS" in model:
+        # GFS Filter Logik über NOAA Nomads Server
         gfs_map = {
-            "t_2m": "&var_TMP=on&lev_2_m_above_ground=on", "td_2m": "&var_DPT=on&lev_2_m_above_ground=on",
-            "vmax_10m": "&var_GUST=on&lev_surface=on", "fi": "&var_HGT=on&lev_500_mb=on",
-            "t": "&var_TMP=on&lev_850_mb=on", "pmsl": "&var_PRMSL=on&lev_mean_sea_level=on",
-            "cape_ml": "&var_CAPE=on&lev_surface=on", "cin_ml": "&var_CIN=on&lev_surface=on",
-            "tot_prec": "&var_APCP=on&lev_surface=on", "hgt_0c": "&var_HGT=on&lev_0C_isotherm=on",
-            "clct": "&var_TCDC=on&lev_entire_atmosphere=on", "relhum": "&var_RH=on&lev_700_mb=on",
-            "h_snow": "&var_SNOD=on&lev_surface=on", "sp": "&var_PRES=on&lev_surface=on",
-            "sli": "&var_4LFTX=on&lev_surface=on", "vis": "&var_VIS=on&lev_surface=on",
+            "t_2m": "&var_TMP=on&lev_2_m_above_ground=on", 
+            "td_2m": "&var_DPT=on&lev_2_m_above_ground=on",
+            "vmax_10m": "&var_GUST=on&lev_surface=on", 
+            "fi": "&var_HGT=on&lev_500_mb=on",
+            "t": "&var_TMP=on&lev_850_mb=on", 
+            "pmsl": "&var_PRMSL=on&lev_mean_sea_level=on",
+            "cape_ml": "&var_CAPE=on&lev_surface=on", 
+            "cin_ml": "&var_CIN=on&lev_surface=on",
+            "tot_prec": "&var_APCP=on&lev_surface=on", 
+            "hgt_0c": "&var_HGT=on&lev_0C_isotherm=on",
+            "clct": "&var_TCDC=on&lev_entire_atmosphere=on", 
+            "relhum": "&var_RH=on&lev_700_mb=on",
+            "h_snow": "&var_SNOD=on&lev_surface=on", 
+            "sp": "&var_PRES=on&lev_surface=on",
+            "sli": "&var_4LFTX=on&lev_surface=on", 
+            "vis": "&var_VIS=on&lev_surface=on",
             "hbas_con": "&var_HGT=on&lev_cloud_base=on"
         }
         gfs_p = gfs_map.get(key, "")
@@ -485,12 +769,14 @@ def fetch_meteo_data(model, param, hr, debug=False):
             try:
                 r = requests.get(url, headers=headers, timeout=10)
                 if r.status_code == 200:
-                    with open("temp_gfs.grib", "wb") as f: f.write(r.content)
+                    with open("temp_gfs.grib", "wb") as f: 
+                        f.write(r.content)
                     ds = xr.open_dataset("temp_gfs.grib", engine='cfgrib')
                     data = ds[list(ds.data_vars)[0]].isel(step=0, height=0, isobaricInhPa=0, missing_dims='ignore').values.squeeze()
                     lons, lats = np.meshgrid(ds.longitude.values, ds.latitude.values)
                     return data, lons, lats, f"{dt_s}{run:02d}", debug_logs
-            except Exception: continue
+            except Exception: 
+                continue
 
     elif "ECMWF" in model:
         is_aifs = "AIFS" in model
@@ -506,25 +792,37 @@ def fetch_meteo_data(model, param, hr, debug=False):
             try:
                 r = requests.get(url, timeout=15)
                 if r.status_code == 200:
-                    with open("temp_ecmwf.grib", "wb") as f: f.write(r.content)
+                    with open("temp_ecmwf.grib", "wb") as f: 
+                        f.write(r.content)
                     e_k = {
-                        "t_2m": "2t", "td_2m": "2d", "vmax_10m": "10fg", "fi": "z", "t": "t", 
-                        "pmsl": "msl", "tot_prec": "tp", "clct": "tcc", "sp": "sp"
+                        "t_2m": "2t", 
+                        "td_2m": "2d", 
+                        "vmax_10m": "10fg", 
+                        "fi": "z", 
+                        "t": "t", 
+                        "pmsl": "msl", 
+                        "tot_prec": "tp", 
+                        "clct": "tcc", 
+                        "sp": "sp"
                     }.get(key, "2t")
+                    
                     ds = xr.open_dataset("temp_ecmwf.grib", engine='cfgrib', filter_by_keys={'shortName': e_k})
                     ds_var = ds[list(ds.data_vars)[0]]
+                    
                     if 'isobaricInhPa' in ds_var.dims:
                         target_p = 500 if "500" in param else 700 if "700" in param else 850
                         ds_var = ds_var.sel(isobaricInhPa=target_p)
+                        
                     data = ds_var.isel(step=0, height=0, missing_dims='ignore').values.squeeze()
                     lons, lats = np.meshgrid(ds.longitude.values, ds.latitude.values)
                     return data, lons, lats, f"{dt_s}{run:02d}", debug_logs
-            except Exception: continue
+            except Exception: 
+                continue
             
     return None, None, None, None, debug_logs
 
 # ==============================================================================
-# 7. KARTENGENERATOR & PLOTTING SYSTEM
+# 8. KARTENGENERATOR & PLOTTING SYSTEM
 # ==============================================================================
 # Das Plotting wird aktiviert, wenn der Button gedrückt wird ODER das Radar auto-refresht
 if generate or (enable_refresh and "Radar" in sel_model):
@@ -566,6 +864,17 @@ if generate or (enable_refresh and "Radar" in sel_model):
                 "Europa": [-12, 40, 34, 66]
             }
             ax.set_extent(extents[sel_region])
+            
+            # ==================================================================
+            # NEU: SATELLITEN-HINTERGRUND FÜR RADAR-ANSICHT
+            # ==================================================================
+            if "Radar" in sel_model:
+                st.toast("Lade hochauflösenden Satelliten-Hintergrund...", icon="🌍")
+                esri_sat = EsriImagery()
+                # Dynamischer Zoom-Level, damit die Satellitenbilder immer scharf bleiben
+                zoom_l = {"Deutschland": 6, "Brandenburg/Berlin": 8, "Mitteleuropa (DE, PL)": 6, "Alpenraum": 7, "Europa": 5}
+                # Zorder=1 stellt sicher, dass das Satellitenbild GANZ UNTEN liegt
+                ax.add_image(esri_sat, zoom_l.get(sel_region, 6), zorder=1)
 
             # Basiskarten-Elemente einzeichnen
             ax.add_feature(cfeature.COASTLINE, linewidth=0.8, edgecolor='black', zorder=12)
@@ -598,6 +907,7 @@ if generate or (enable_refresh and "Radar" in sel_model):
                     # Bei RainViewer sind 'data' und 'lons' die Host und Path Parameter
                     rv_tiles = RainViewerTiles(host=data, path=lons)
                     zoom_l = {"Deutschland": 6, "Brandenburg/Berlin": 8, "Mitteleuropa (DE, PL)": 6, "Alpenraum": 7, "Europa": 5}
+                    # Radar-Tiles über das Satellitenbild legen (zorder=5)
                     ax.add_image(rv_tiles, zoom_l.get(sel_region, 6), zorder=5)
                     
                     # Dummy ScalarMappable erstellen, um RainViewer Farben zu erklären
@@ -607,8 +917,9 @@ if generate or (enable_refresh and "Radar" in sel_model):
                     fig.colorbar(sm, ax=ax, label="Radar-Reflektivität in dBZ (RainViewer-Farben)", shrink=0.4)
                 else:
                     # Normales DWD-Rohdaten Raster (Matrix Rendering)
+                    # NaN-Werte sind transparent definiert, daher sieht man hier nun das Satellitenbild!
                     im = ax.pcolormesh(lons, lats, data, cmap=cmap_radar, norm=norm_radar, shading='auto', zorder=5)
-                    fig.colorbar(im, ax=ax, label="Radar-Reflektivität in dBZ", shrink=0.4, ticks=[0, 15, 30, 45, 60, 75])
+                    fig.colorbar(im, ax=ax, label="Radar-Reflektivität in dBZ (DWD Raw)", shrink=0.4, ticks=[0, 15, 30, 45, 60, 75])
                 
             elif "Niederschlag" in sel_param:
                 im = ax.pcolormesh(lons, lats, data, cmap=cmap_precip, norm=norm_precip, shading='auto', zorder=5)
@@ -677,7 +988,8 @@ if generate or (enable_refresh and "Radar" in sel_model):
             elif "Signifikantes Wetter" in sel_param:
                 grid = np.zeros_like(data)
                 for i, (l, (c, codes)) in enumerate(WW_LEGEND_DATA.items(), 1):
-                    for code in codes: grid[data == code] = i
+                    for code in codes: 
+                        grid[data == code] = i
                 ax.pcolormesh(lons, lats, grid, cmap=cmap_ww, shading='nearest', zorder=5)
                 patches = [mpatches.Patch(color=c, label=l) for l, (c, _) in WW_LEGEND_DATA.items()]
                 ax.legend(handles=patches, loc='lower left', title="Wetter-Klassifikation", fontsize='6', title_fontsize='7', framealpha=0.9).set_zorder(25)
@@ -698,7 +1010,8 @@ if generate or (enable_refresh and "Radar" in sel_model):
             # ----------------------------------------------------------------------
             if iso_data is not None:
                 p_hpa = iso_data / 100 if iso_data.max() > 5000 else iso_data
-                if ilons.ndim == 1: ilons, ilats = np.meshgrid(ilons, ilats)
+                if ilons.ndim == 1: 
+                    ilons, ilats = np.meshgrid(ilons, ilats)
                 cs = ax.contour(ilons, ilats, p_hpa, colors='black', linewidths=0.7, levels=np.arange(940, 1060, 4), zorder=20)
                 ax.clabel(cs, inline=True, fontsize=8, fmt='%1.0f')
 
@@ -717,9 +1030,10 @@ if generate or (enable_refresh and "Radar" in sel_model):
                     time_display = dt_loc.strftime('%d.%m.%Y %H:%M') + (" MESZ" if dt_loc.dst() else " MEZ")
                 except Exception:
                     time_display = run_id
+                    
                 info_txt = f"Modell: {sel_model}\nParameter: {sel_param}\nLive-Stand: {time_display}\n(Quelle: {'RainViewer API' if 'RainViewer' in sel_model else 'DWD OpenData'})"
             else:
-                # Zeigeberechnung für Prognosemodelle
+                # Zeigeberechnung für klassische Prognosemodelle
                 v_dt_utc = datetime.strptime(run_id, "%Y%m%d%H").replace(tzinfo=timezone.utc) + timedelta(hours=sel_hour)
                 v_dt_loc = v_dt_utc.astimezone(LOCAL_TZ)
                 tz_str = "MESZ" if v_dt_loc.dst() else "MEZ"
@@ -727,7 +1041,7 @@ if generate or (enable_refresh and "Radar" in sel_model):
                 
             ax.text(0.02, 0.98, info_txt, transform=ax.transAxes, fontsize=7, fontweight='bold', va='top', bbox=dict(facecolor='white', alpha=0.8, boxstyle='round,pad=0.3', edgecolor='gray'), zorder=30)
 
-            # Finale Render-Instanz
+            # Finale Render-Instanz der Karte auf das Streamlit Dashboard
             st.pyplot(fig)
             
             # ----------------------------------------------------------------------
@@ -748,6 +1062,7 @@ if generate or (enable_refresh and "Radar" in sel_model):
                     use_container_width=True
                 )
             
+            # Speicher freigeben
             cleanup_temp_files()
             
         except Exception as plot_err:
@@ -758,3 +1073,4 @@ if generate or (enable_refresh and "Radar" in sel_model):
     else:
         st.error(f"⚠️ Aktuell liefert der gewählte Server keine Daten für '{sel_param}'.")
         st.info("💡 Wenn das DWD-Radar oder ICON-D2 hakt, versuche es in wenigen Minuten noch einmal oder schalte auf 'RainViewer Echtzeit-Radar' um!")
+
