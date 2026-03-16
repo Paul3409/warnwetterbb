@@ -65,12 +65,9 @@ precip_colors = [
     '#FFFFFF'  # 50: richtung weiß
 ]
 
-# Da die Werte nicht linear verteilt sind, berechnen wir die relativen Positionen
-# für die Colormap (0.0 bis 1.0) basierend auf dem Maximalwert (50)
 vmax_precip = 50.0
 precip_anchors = [v / vmax_precip for v in precip_values]
 cmap_precip = mcolors.LinearSegmentedColormap.from_list("custom_precip", list(zip(precip_anchors, precip_colors)))
-# Lineare Normalisierung reicht hier völlig aus, da die Anker die Verteilung übernehmen
 norm_precip = mcolors.Normalize(vmin=0, vmax=vmax_precip)
 
 # --- CAPE (EXAKTE GRENZWERTE) ---
@@ -389,10 +386,10 @@ if generate:
             plt.colorbar(im, label="Radar-Reflektivität in dBZ", shrink=0.4, ticks=[0, 15, 30, 45, 60, 75])
             
         elif "Niederschlag" in sel_param:
-            # Deine exakten HTML-Töne werden hier mit linearer Verteilung und Ankern flüssig gerendert!
             im = ax.pcolormesh(lons, lats, data, cmap=cmap_precip, norm=norm_precip, shading='auto', zorder=5)
-            # Genau angepasste Legenden-Schritte
-            ticks_precip = [0, 0.5, 1, 2, 5, 10, 20, 30, 40, 50]
+            
+            # SAUBERE 5er-SCHRITTE FÜR DIE LEGENDE
+            ticks_precip = list(range(0, 55, 5)) 
             plt.colorbar(im, label="Niederschlagssumme in mm", shrink=0.4, ticks=ticks_precip)
             
         elif "Gesamtbedeckung" in sel_param:
