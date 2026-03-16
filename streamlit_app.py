@@ -14,12 +14,12 @@ from zoneinfo import ZoneInfo
 import numpy as np
 
 # ==============================================================================
-# 1. SETUP, KONFIGURATION & CACHE-MANAGEMENT
+# 1. SETUP, KONFIGURATION & AGGRESSIVES CACHE-MANAGEMENT
 # ==============================================================================
 st.set_page_config(page_title="WarnwetterBB | Pro-Zentrale", layout="wide", initial_sidebar_state="expanded")
 
 def cleanup_temp_files():
-    """Aggressive Bereinigung aller temporären GRIB-Reste auf dem Server."""
+    """Aggressive Bereinigung aller temporären GRIB-Reste auf dem Server (Memory-Leak Schutz)."""
     temp_files = ["temp.grib", "temp_gfs.grib", "temp_ecmwf.grib", "temp.grib.idx", "temp_gfs.grib.idx"]
     for file in temp_files:
         if os.path.exists(file):
@@ -47,22 +47,9 @@ cmap_temp = mcolors.LinearSegmentedColormap.from_list("custom_temp", temp_colors
 # --- NIEDERSCHLAG (DEINE EXAKTE HTML-FARBPALETTE - PERFEKTIONIERTER ÜBERGANG) ---
 precip_values = [0, 0.2, 0.5, 1.0, 1.5, 2.0, 3, 4, 5, 8, 12, 15, 20, 30, 40, 50]
 precip_colors = [
-    '#FFFFFF', # 0: white
-    '#87CEEB', # 0.2: Skyblue
-    '#1E90FF', # 0.5: DodgerBlue
-    '#191970', # 1.0: Midnightblue
-    '#006400', # 1.5: Darkgreen
-    '#32CD32', # 2.0: Limegreen
-    '#FFFF00', # 3: yellow
-    '#FFA500', # 4: orange
-    '#FF0000', # 5: red
-    '#8B0000', # 8: darkred
-    '#800000', # 12: maroon
-    '#4B0082', # 15: indigo
-    '#800080', # 20: purple
-    '#9400D3', # 30: darkviolet
-    '#7B68EE', # 40: mediumslateblue
-    '#FFFFFF'  # 50: richtung weiß
+    '#FFFFFF', '#87CEEB', '#1E90FF', '#191970', '#006400', '#32CD32', '#FFFF00', 
+    '#FFA500', '#FF0000', '#8B0000', '#800000', '#4B0082', '#800080', '#9400D3', 
+    '#7B68EE', '#FFFFFF'  
 ]
 vmax_precip = 50.0
 precip_anchors = [v / vmax_precip for v in precip_values]
@@ -120,9 +107,10 @@ cmap_ww = mcolors.ListedColormap(['#FFFFFF00'] + [c for l, (c, codes) in WW_LEGE
 
 
 # ==============================================================================
-# 3. DAS EISERNE ROUTING-SYSTEM (VERHINDERT 404-FEHLER!)
+# 3. DAS EISERNE ROUTING-SYSTEM (VERHINDERT 404-FEHLER & DEADLINKS!)
 # ==============================================================================
-# Diese Struktur definiert EXAKT, welches Modell welche Daten wirklich berechnet.
+# ICON-D2-RUC wurde entfernt, da der DWD die Datenstruktur zerschossen hat.
+# Die Logik weiß jetzt exakt, was jedes Modell kann!
 
 MODEL_ROUTER = {
     "ICON-D2": {
@@ -133,13 +121,6 @@ MODEL_ROUTER = {
                    "Signifikantes Wetter", "Sichtweite (m)", "Wolkenuntergrenze (m)", "Wolkenobergrenze (m)", 
                    "Spezifische Feuchte (g/kg)", "Simuliertes Radar (dBZ)", "Helizität / SRH (m²/s²)", 
                    "Sonnenscheindauer (Min)"]
-    },
-    "ICON-D2-RUC": {
-        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum"],
-        "params": ["Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
-                   "Niederschlag (mm)", "CAPE (J/kg)", "Gesamtbedeckung (%)", "Schneehöhe (cm)",
-                   "Sichtweite (m)", "Wolkenuntergrenze (m)", "Wolkenobergrenze (m)", "Simuliertes Radar (dBZ)", 
-                   "Helizität / SRH (m²/s²)"] # RUC berechnet keine Geopot. Höhe im OpenData!
     },
     "ICON-EU": {
         "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"],
@@ -165,7 +146,6 @@ MODEL_ROUTER = {
         "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"],
         "params": ["Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
                    "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "Gesamtbedeckung (%)"] 
-                   # ECMWF liefert im Gratis-Layer kein CAPE oder Radar!
     },
     "ECMWF-AIFS (KI-Modell)": {
         "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"],
@@ -175,11 +155,8 @@ MODEL_ROUTER = {
 }
 
 def estimate_latest_run(model, now_utc):
-    """Präzise Schätzung des aktuellsten Modelllaufs inkl. Server-Delay"""
-    if "RUC" in model: 
-        # RUC ist schnell, braucht ca. 1.5 Stunden für den Upload
-        return now_utc.replace(minute=0, second=0, microsecond=0) - timedelta(hours=2)
-    elif "D2" in model or "EU" in model:
+    """Präzise Schätzung des aktuellsten Modelllaufs inkl. Server-Delay (Rechenzeit der Supercomputer)"""
+    if "D2" in model or "EU" in model:
         run_h = ((now_utc.hour - 3) // 3) * 3
         if run_h < 0: return (now_utc - timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0)
         return now_utc.replace(hour=run_h, minute=0, second=0, microsecond=0)
@@ -194,7 +171,7 @@ def estimate_latest_run(model, now_utc):
 
 
 # ==============================================================================
-# 4. DYNAMISCHE SIDEBAR (100% SICHERE AUSWAHL)
+# 4. DYNAMISCHE SIDEBAR (100% SICHERE AUSWAHL - KEINE GEISTERKLICKS)
 # ==============================================================================
 with st.sidebar:
     st.header("🛰️ Modell-Zentrale")
@@ -211,9 +188,7 @@ with st.sidebar:
         sel_param = st.radio("Parameter", valid_params, label_visibility="collapsed")
     
     with st.expander("⏱️ 4. Vorhersage-Stunde (MEZ/MESZ)", expanded=True):
-        # Stundenlimitierungen an die echten Modellkapazitäten angepasst
-        if "RUC" in sel_model: hours = list(range(1, 28)) # RUC rechnet maximal +27h!
-        elif "EU" in sel_model: hours = list(range(1, 79))
+        if "EU" in sel_model: hours = list(range(1, 79))
         elif "GFS" in sel_model or "Global" in sel_model: hours = list(range(3, 123, 3))
         elif "ECMWF" in sel_model: hours = list(range(3, 147, 3))
         else: hours = list(range(1, 49))
@@ -237,24 +212,26 @@ with st.sidebar:
     st.markdown("---")
     generate = st.button("🚀 Profi-Karte generieren", use_container_width=True)
     
-    # Versteckte Debug-Konsole für Fehleranalyse
+    # NEU: Entwickler-Konsole, damit wir sofort sehen, warum ein Server "Nein" sagt.
     with st.expander("🛠️ Entwickler-Konsole"):
-        debug_mode = st.checkbox("URL-Ping aktivieren (Zeigt interne Serveranfragen)")
+        debug_mode = st.checkbox("URL-Ping aktivieren (Zeigt Live-Serveranfragen)")
 
 
 # ==============================================================================
-# 5. DATA FETCH ENGINE (EXTREM ROBUST MIT DEEP-SCAN)
+# 5. DATA FETCH ENGINE (DER BEREINIGTE KERNREAKTOR)
 # ==============================================================================
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_meteo_data(model, param, hr, debug=False):
-    # Mapping auf die GRIB ShortNames der Server (Korrigiert für hbas_con!)
+    # DYNAMISCHES MAPPING: Wolkenuntergrenze heißt bei D2 "ceiling", bei EU "hbas_con"!
+    dyn_cloud_base = "ceiling" if "D2" in model else "hbas_con"
+    
     p_map = {
         "Temperatur 2m (°C)": "t_2m", "Taupunkt 2m (°C)": "td_2m", "Windböen (km/h)": "vmax_10m", 
         "Bodendruck (hPa)": "sp", "500 hPa Geopot. Höhe": "fi", "850 hPa Temp.": "t", 
         "Signifikantes Wetter": "ww", "Isobaren": "pmsl", "CAPE (J/kg)": "cape_ml", 
         "CIN (J/kg)": "cin_ml", "Niederschlag (mm)": "tot_prec", "Simuliertes Radar (dBZ)": "dbz_cmax",
         "0-Grad-Grenze (m)": "hgt_0c", "Gesamtbedeckung (%)": "clct", "Rel. Feuchte 700 hPa (%)": "relhum", 
-        "Schneehöhe (cm)": "h_snow", "Sichtweite (m)": "vis", "Wolkenuntergrenze (m)": "hbas_con",
+        "Schneehöhe (cm)": "h_snow", "Sichtweite (m)": "vis", "Wolkenuntergrenze (m)": dyn_cloud_base,
         "Wolkenobergrenze (m)": "htop_con", "Spezifische Feuchte (g/kg)": "qv",
         "Helizität / SRH (m²/s²)": "uh_max", "Sonnenscheindauer (Min)": "dur_sun", "Lifted Index (K)": "sli"
     }
@@ -263,26 +240,20 @@ def fetch_meteo_data(model, param, hr, debug=False):
     headers = {'User-Agent': 'Mozilla/5.0'}
     debug_logs = []
 
-    # --- A: DWD LOGIK (MIT DEEP SCAN) ---
+    # --- A: DWD LOGIK (MIT 18-STUNDEN DEEP-SCAN FÜR VERZÖGERTE SERVER) ---
     if "ICON" in model:
-        is_ruc = "RUC" in model
         is_global = "Global" in model
-        
         if is_global: m_dir, reg_str = "icon", "icon_global"
-        elif is_ruc: m_dir, reg_str = "icon-d2-ruc", "icon-d2-ruc_germany"
         elif "D2" in model: m_dir, reg_str = "icon-d2", "icon-d2_germany"
         else: m_dir, reg_str = "icon-eu", "icon-eu_europe"
         
-        # DEEP SCAN: Er sucht bis zu 18 Stunden rückwärts, falls der DWD einen Lauf verzögert oder löscht!
         for off in range(1, 18):
             t = now - timedelta(hours=off)
-            if is_ruc: run = t.hour
-            elif is_global: run = (t.hour // 6) * 6
+            if is_global: run = (t.hour // 6) * 6
             else: run = (t.hour // 3) * 3
             
             dt_s = t.replace(hour=run, minute=0, second=0, microsecond=0).strftime("%Y%m%d%H")
             
-            # Genaue Level-Typ Bestimmung (DWD hat hbas_con im single-level Ordner)
             l_type = "pressure-level" if key in ["fi", "t", "relhum", "qv"] else "single-level"
             if l_type == "pressure-level": lvl_str = f"{'500' if '500' in param else '700' if '700' in param else '850'}_"
             else: lvl_str = "2d_"
@@ -336,14 +307,18 @@ def fetch_meteo_data(model, param, hr, debug=False):
                     return data, lons, lats, f"{dt_s}{run:02d}", debug_logs
             except Exception: continue
 
-    # --- C: ECMWF & AIFS LOGIK ---
+    # --- C: ECMWF & AIFS LOGIK (AUFLÖSUNGS-BUG BEHOBEN!) ---
     elif "ECMWF" in model:
-        sys_type = "aifs" if "AIFS" in model else "ifs"
+        is_aifs = "AIFS" in model
+        sys_type = "aifs" if is_aifs else "ifs"
+        # ECMWF Normal (IFS) liegt in 0p4-beta. AIFS (KI) liegt in 0p25-beta. Hier war der 404-Fehler versteckt!
+        res_str = "0p25-beta" if is_aifs else "0p4-beta"
+        
         for off in [0, 12, 24, 36]:
             t = now - timedelta(hours=off)
             run = (t.hour // 12) * 12
             dt_s = t.strftime("%Y%m%d")
-            url = f"https://data.ecmwf.int/forecasts/{dt_s}/{run:02d}z/{sys_type}/0p25-beta/oper/{dt_s}{run:02d}0000-{hr}h-oper-fc.grib2"
+            url = f"https://data.ecmwf.int/forecasts/{dt_s}/{run:02d}z/{sys_type}/{res_str}/oper/{dt_s}{run:02d}0000-{hr}h-oper-fc.grib2"
             debug_logs.append(url)
             try:
                 r = requests.get(url, timeout=15)
@@ -376,7 +351,7 @@ if generate:
         iso_data, ilons, ilats, _, _ = fetch_meteo_data(sel_model, "Isobaren", sel_hour) if show_isobars else (None, None, None, None, None)
 
     if debug_mode and d_logs:
-        st.write("📡 **Interne Server-Pings:**")
+        st.write("📡 **Interne Server-Pings (Debug):**")
         for log in d_logs[:3]: st.code(log)
 
     if data is not None:
@@ -532,4 +507,4 @@ if generate:
         
     else:
         st.error(f"⚠️ Der Server von {sel_model} liefert für '{sel_param}' (+{sel_hour}h) aktuell keine Daten aus.")
-        st.info("💡 Tipp: Versuch eine etwas spätere Vorhersagestunde oder aktiviere in der Sidebar die 'Entwickler-Konsole', um die DWD-Anfragen zu prüfen.")
+        st.info("💡 Tipp: Versuch eine etwas spätere Vorhersagestunde oder aktiviere links die 'Entwickler-Konsole', um die Pings zu prüfen!")
