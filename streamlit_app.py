@@ -27,12 +27,11 @@ def cleanup_temp_files():
             except Exception:
                 pass
 
-# Lokale Zeitzone für Deutschland (MEZ/MESZ automatisch)
 LOCAL_TZ = ZoneInfo("Europe/Berlin")
 WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 # ==============================================================================
-# 2. METEOROLOGISCHE FARBSKALEN (HOCHPRÄZISE)
+# 2. METEOROLOGISCHE FARBSKALEN (HOCHPRÄZISE & OPTIMIERT)
 # ==============================================================================
 
 # --- TEMPERATUR & TAUPUNKT (Die schlagartigen 10er-Sprünge) ---
@@ -44,25 +43,29 @@ temp_colors = [
 ]
 cmap_temp = mcolors.LinearSegmentedColormap.from_list("custom_temp", temp_colors)
 
-# --- NIEDERSCHLAG (DEINE NEUE NICHT-LINEARE FEIN-SKALA) ---
-# Wertebereich 0 bis 100 mm. Die erste Zahl ist der relative Punkt (0.0 bis 1.0)
+# --- NIEDERSCHLAG (DEINE PROFISCH-ABGEMISCHTE SKALA MIT GAMMA-KORREKTUR) ---
+precip_values = [0, 0.5, 1, 2, 3, 5, 10, 20, 30, 40, 50, 75, 100]
 precip_colors = [
-    (0.0,   '#FFFFFF'), # 0 mm: weiß
-    (0.005, '#ADD8E6'), # 0.5 mm: hellblau
-    (0.01,  '#00008B'), # 1 mm: dunkelblau
-    (0.02,  '#006400'), # 2 mm: dunkelgrün
-    (0.03,  '#FFFF00'), # 3 mm: gelb
-    (0.05,  '#FFA500'), # 5 mm: orange
-    (0.10,  '#FF0000'), # 10 mm: rot
-    (0.20,  '#8B0000'), # 20 mm: dunkelrot
-    (0.30,  '#800080'), # 30 mm: lila
-    (0.40,  '#FF00FF'), # 40 mm: magenta
-    (0.50,  '#FFC0CB'), # 50 mm: rosa
-    (0.75,  '#FFFFFF'), # 75 mm: weiß
-    (1.00,  '#808080')  # 100 mm: grau
+    '#FFFFFF', # 0: weiß
+    '#B3E5FC', # 0.5: hellblau (sattes eisblau)
+    '#0288D1', # 1: dunkelblau
+    '#2E7D32', # 2: dunkelgrün (professionelles Waldgrün)
+    '#FBC02D', # 3: gelb (kräftig)
+    '#F57C00', # 5: orange
+    '#D32F2F', # 10: rot
+    '#880E4F', # 20: dunkelrot (Bordeaux)
+    '#7B1FA2', # 30: lila
+    '#E040FB', # 40: magenta
+    '#F8BBD0', # 50: rosa
+    '#FAFAFA', # 75: fast-weiß (leichtes Grau-Weiß zur Abgrenzung von der 0)
+    '#757575'  # 100: grau
 ]
-# Flüssiger Übergang dank LinearSegmentedColormap
-cmap_precip = mcolors.LinearSegmentedColormap.from_list("custom_precip", precip_colors)
+# Gamma 0.5 (Wurzelfunktion) streckt den Bereich von 0-10 extrem, 
+# damit er auf der Skala nicht zerquetscht wird!
+gamma_precip = 0.5
+precip_anchors = [(v / 100.0)**gamma_precip for v in precip_values]
+cmap_precip = mcolors.LinearSegmentedColormap.from_list("custom_precip", list(zip(precip_anchors, precip_colors)))
+norm_precip = mcolors.PowerNorm(gamma=gamma_precip, vmin=0, vmax=100)
 
 # --- CAPE (EXAKTE GRENZWERTE) ---
 cape_levels = [0, 25, 50, 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 10000]
@@ -118,7 +121,6 @@ cmap_ww = mcolors.ListedColormap(['#FFFFFF00'] + [c for l, (c, codes) in WW_LEGE
 # 3. HELPER: VERFÜGBARKEITS-LOGIK FÜR MODELLE
 # ==============================================================================
 ALL_REGIONS = ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"]
-
 ALL_PARAMS = [
     "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
     "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "CAPE (J/kg)", 
@@ -148,9 +150,7 @@ def get_valid_params(model):
     return base
 
 def estimate_latest_run(model, now_utc):
-    """Schätzt den aktuellsten fertigen Modelllauf ab."""
-    if "RUC" in model:
-        return now_utc.replace(minute=0, second=0, microsecond=0) - timedelta(hours=2)
+    if "RUC" in model: return now_utc.replace(minute=0, second=0, microsecond=0) - timedelta(hours=2)
     elif "D2" in model or "EU" in model:
         run_h = ((now_utc.hour - 3) // 3) * 3
         if run_h < 0: return (now_utc - timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0)
@@ -201,8 +201,7 @@ with st.sidebar:
             target_dt_loc = target_dt_utc.astimezone(LOCAL_TZ)
             tz_str = "MESZ" if target_dt_loc.dst() else "MEZ"
             wt = WOCHENTAGE[target_dt_loc.weekday()]
-            # FIX: %H:00 statt %H:%00 für korrekte Uhrzeit-Anzeige
-            time_str = f"+{h}h  ({wt}, {target_dt_loc.strftime('%d.%m. %H:00')} {tz_str})"
+            time_str = f"+{h}h  ({wt}, {target_dt_loc.strftime('%d.%m. %H:%M')} {tz_str})"
             hour_labels.append(time_str)
             
         sel_hour_str = st.radio("Zeit", hour_labels, label_visibility="collapsed")
@@ -212,7 +211,6 @@ with st.sidebar:
     st.markdown("---")
     generate = st.button("🚀 Profi-Karte generieren", use_container_width=True)
 
-# BLOCKER-LOGIK
 if generate:
     if "🚫" in sel_region_raw:
         st.warning(f"Die Region '{sel_region_raw.replace('  🚫 (ausgegraut)', '')}' wird vom {sel_model} nicht abgedeckt.")
@@ -226,7 +224,7 @@ sel_param = sel_param_raw.replace("  🚫 (ausgegraut)", "")
 
 
 # ==============================================================================
-# 5. DATA FETCH ENGINE (ABSOLUT FEHLERTOLERANT & UMFASSEND)
+# 5. DATA FETCH ENGINE
 # ==============================================================================
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_meteo_data(model, param, hr):
@@ -240,12 +238,10 @@ def fetch_meteo_data(model, param, hr):
         "Wolkenobergrenze (m)": "htop_con", "Spezifische Feuchte (g/kg)": "qv",
         "Helizität / SRH (m²/s²)": "uh_max", "Sonnenscheindauer (Min)": "dur_sun", "Lifted Index (K)": "sli"
     }
-    
     key = p_map.get(param, "t_2m")
     now = datetime.now(timezone.utc)
     headers = {'User-Agent': 'Mozilla/5.0'}
 
-    # --- A: DWD LOGIK ---
     if "ICON" in model:
         is_ruc = "RUC" in model
         is_global = "Global" in model
@@ -264,10 +260,8 @@ def fetch_meteo_data(model, param, hr):
             dt_s = t.replace(hour=run, minute=0, second=0, microsecond=0).strftime("%Y%m%d%H")
             
             l_type = "pressure-level" if key in ["fi", "t", "relhum", "qv"] else "single-level"
-            if l_type == "pressure-level": 
-                lvl_str = f"{'500' if '500' in param else '700' if '700' in param else '850'}_"
-            else: 
-                lvl_str = "2d_"
+            if l_type == "pressure-level": lvl_str = f"{'500' if '500' in param else '700' if '700' in param else '850'}_"
+            else: lvl_str = "2d_"
             
             url = f"https://opendata.dwd.de/weather/nwp/{m_dir}/grib/{run:02d}/{key}/{reg_str}_regular-lat-lon_{l_type}_{dt_s}_{hr:03d}_{lvl_str}{key}.grib2.bz2"
             
@@ -275,22 +269,18 @@ def fetch_meteo_data(model, param, hr):
                 r = requests.get(url, timeout=10)
                 if r.status_code == 200:
                     with bz2.open(io.BytesIO(r.content)) as f_bz2:
-                        with open("temp.grib", "wb") as f_out: 
-                            f_out.write(f_bz2.read())
+                        with open("temp.grib", "wb") as f_out: f_out.write(f_bz2.read())
                     ds = xr.open_dataset("temp.grib", engine='cfgrib')
                     ds_var = ds[list(ds.data_vars)[0]]
-                    
                     if 'isobaricInhPa' in ds_var.dims:
                         target_p = 500 if "500" in param else 700 if "700" in param else 850
                         ds_var = ds_var.sel(isobaricInhPa=target_p)
-                        
                     data = ds_var.isel(step=0, height=0, missing_dims='ignore').values.squeeze()
                     lons, lats = ds.longitude.values, ds.latitude.values
                     if lons.ndim == 1: lons, lats = np.meshgrid(lons, lats)
                     return data, lons, lats, dt_s
             except Exception: continue
 
-    # --- B: GFS LOGIK ---
     elif "GFS" in model:
         gfs_map = {
             "t_2m": "&var_TMP=on&lev_2_m_above_ground=on", "td_2m": "&var_DPT=on&lev_2_m_above_ground=on",
@@ -303,7 +293,6 @@ def fetch_meteo_data(model, param, hr):
             "sli": "&var_4LFTX=on&lev_surface=on"
         }
         gfs_p = gfs_map.get(key, "")
-        
         for off in [3, 6, 9, 12, 18]:
             t = now - timedelta(hours=off)
             run = (t.hour // 6) * 6
@@ -319,27 +308,22 @@ def fetch_meteo_data(model, param, hr):
                     return data, lons, lats, f"{dt_s}{run:02d}"
             except Exception: continue
 
-    # --- C: ECMWF & AIFS LOGIK ---
     elif "ECMWF" in model:
         sys_type = "aifs" if "AIFS" in model else "ifs"
-        
         for off in [0, 12, 24, 36]:
             t = now - timedelta(hours=off)
             run = (t.hour // 12) * 12
             dt_s = t.strftime("%Y%m%d")
             url = f"https://data.ecmwf.int/forecasts/{dt_s}/{run:02d}z/{sys_type}/0p25-beta/oper/{dt_s}{run:02d}0000-{hr}h-oper-fc.grib2"
-            
             try:
                 r = requests.get(url, timeout=25)
                 if r.status_code == 200:
                     with open("temp_ecmwf.grib", "wb") as f: f.write(r.content)
-                    
                     e_k = {
                         "t_2m": "2t", "td_2m": "2d", "vmax_10m": "10fg", "fi": "z", "t": "t", 
                         "pmsl": "msl", "cape_ml": "cape", "cin_ml": "cin", "tot_prec": "tp",
                         "clct": "tcc", "relhum": "r", "h_snow": "sd", "sp": "sp", "sli": "li"
                     }.get(key, "2t")
-                    
                     ds = xr.open_dataset("temp_ecmwf.grib", engine='cfgrib', filter_by_keys={'shortName': e_k})
                     ds_var = ds[list(ds.data_vars)[0]]
                     if 'isobaricInhPa' in ds_var.dims:
@@ -352,7 +336,7 @@ def fetch_meteo_data(model, param, hr):
     return None, None, None, None
 
 # ==============================================================================
-# 6. KARTENGENERATOR & PLOTTING (DIE ENGINE)
+# 6. KARTENGENERATOR & PLOTTING
 # ==============================================================================
 if generate:
     cleanup_temp_files()
@@ -372,14 +356,13 @@ if generate:
         }
         ax.set_extent(extents[sel_region])
 
-        # Scharfe topografische Overlays
         ax.add_feature(cfeature.COASTLINE, linewidth=0.8, edgecolor='black', zorder=12)
         ax.add_feature(cfeature.BORDERS, linewidth=0.8, edgecolor='black', zorder=12)
         states = cfeature.NaturalEarthFeature(category='cultural', name='admin_1_states_provinces_lines', scale='10m', facecolor='none')
         ax.add_feature(states, linewidth=0.5, edgecolor='black', zorder=12)
 
         # ----------------------------------------------------------------------
-        # PLOTTING-LOGIK FÜR 22 PARAMETER
+        # PLOTTING-LOGIK
         # ----------------------------------------------------------------------
         if "Temperatur" in sel_param or "850 hPa Temp." in sel_param or "Taupunkt" in sel_param:
             val_c = data - 273.15 if data.max() > 100 else data
@@ -400,9 +383,11 @@ if generate:
             plt.colorbar(im, label="Radar-Reflektivität in dBZ", shrink=0.4, ticks=[0, 15, 30, 45, 60, 75])
             
         elif "Niederschlag" in sel_param:
-            # WICHTIG: norm=Normalize(vmin=0, vmax=100), da die neue Farbskala relativ dazu arbeitet!
-            im = ax.pcolormesh(lons, lats, data, cmap=cmap_precip, norm=mcolors.Normalize(vmin=0, vmax=100), shading='auto', zorder=5)
-            plt.colorbar(im, label="Niederschlagssumme in mm", shrink=0.4, ticks=[0.5, 5, 20, 50, 100])
+            # WICHTIG: norm=norm_precip wendet die Gamma-Korrektur an, damit die 0-10 mm super sichtbar werden!
+            im = ax.pcolormesh(lons, lats, data, cmap=cmap_precip, norm=norm_precip, shading='auto', zorder=5)
+            # Genau deine gewünschten Ticks!
+            ticks_precip = [0, 2, 4, 6, 8, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+            plt.colorbar(im, label="Niederschlagssumme in mm", shrink=0.4, ticks=ticks_precip)
             
         elif "Gesamtbedeckung" in sel_param:
             im = ax.pcolormesh(lons, lats, data, cmap=cmap_clouds, norm=mcolors.Normalize(vmin=0, vmax=100), shading='auto', zorder=5)
@@ -469,7 +454,7 @@ if generate:
                 for code in codes: grid[data == code] = i
             ax.pcolormesh(lons, lats, grid, cmap=cmap_ww, shading='nearest', zorder=5)
             patches = [mpatches.Patch(color=c, label=l) for l, (c, _) in WW_LEGEND_DATA.items()]
-            ax.legend(handles=patches, loc='lower left', title="Wetter", fontsize='6', title_fontsize='7', framealpha=0.9).set_zorder(25)
+            ax.legend(handles=patches, loc='lower left', title="Wetter-Klassifikation", fontsize='6', title_fontsize='7', framealpha=0.9).set_zorder(25)
 
         # ----------------------------------------------------------------------
         # ISOBAREN OVERLAY
@@ -481,14 +466,13 @@ if generate:
             ax.clabel(cs, inline=True, fontsize=8, fmt='%1.0f')
 
         # ----------------------------------------------------------------------
-        # HEADER INFO (Mit exakter lokaler Zeit: MEZ/MESZ)
+        # HEADER INFO
         # ----------------------------------------------------------------------
         v_dt_utc = datetime.strptime(run_id, "%Y%m%d%H").replace(tzinfo=timezone.utc) + timedelta(hours=sel_hour)
         v_dt_loc = v_dt_utc.astimezone(LOCAL_TZ)
         tz_str = "MESZ" if v_dt_loc.dst() else "MEZ"
         
-        # %H:00 repariert (ohne das extra % vor der Null)
-        info_txt = f"Modell: {sel_model}\nParameter: {sel_param}\nTermin: {v_dt_loc.strftime('%d.%m.%Y %H:00')} {tz_str}\nModell-Lauf: {run_id[-2:]}Z"
+        info_txt = f"Modell: {sel_model}\nParameter: {sel_param}\nTermin: {v_dt_loc.strftime('%d.%m.%Y %H:%M')} {tz_str}\nModell-Lauf: {run_id[-2:]}Z"
         ax.text(0.02, 0.98, info_txt, transform=ax.transAxes, fontsize=7, fontweight='bold', va='top', bbox=dict(facecolor='white', alpha=0.8, boxstyle='round,pad=0.3', edgecolor='gray'), zorder=30)
 
         st.pyplot(fig)
