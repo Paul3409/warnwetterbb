@@ -32,7 +32,7 @@ LOCAL_TZ = ZoneInfo("Europe/Berlin")
 WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 # ==============================================================================
-# 2. METEOROLOGISCHE FARBSKALEN (HOCHPRÄZISE & ORIGINAL DWD)
+# 2. METEOROLOGISCHE FARBSKALEN (HOCHPRÄZISE)
 # ==============================================================================
 
 # --- TEMPERATUR & TAUPUNKT (Die schlagartigen 10er-Sprünge) ---
@@ -44,6 +44,26 @@ temp_colors = [
 ]
 cmap_temp = mcolors.LinearSegmentedColormap.from_list("custom_temp", temp_colors)
 
+# --- NIEDERSCHLAG (DEINE NEUE NICHT-LINEARE FEIN-SKALA) ---
+# Wertebereich 0 bis 100 mm. Die erste Zahl ist der relative Punkt (0.0 bis 1.0)
+precip_colors = [
+    (0.0,   '#FFFFFF'), # 0 mm: weiß
+    (0.005, '#ADD8E6'), # 0.5 mm: hellblau
+    (0.01,  '#00008B'), # 1 mm: dunkelblau
+    (0.02,  '#006400'), # 2 mm: dunkelgrün
+    (0.03,  '#FFFF00'), # 3 mm: gelb
+    (0.05,  '#FFA500'), # 5 mm: orange
+    (0.10,  '#FF0000'), # 10 mm: rot
+    (0.20,  '#8B0000'), # 20 mm: dunkelrot
+    (0.30,  '#800080'), # 30 mm: lila
+    (0.40,  '#FF00FF'), # 40 mm: magenta
+    (0.50,  '#FFC0CB'), # 50 mm: rosa
+    (0.75,  '#FFFFFF'), # 75 mm: weiß
+    (1.00,  '#808080')  # 100 mm: grau
+]
+# Flüssiger Übergang dank LinearSegmentedColormap
+cmap_precip = mcolors.LinearSegmentedColormap.from_list("custom_precip", precip_colors)
+
 # --- CAPE (EXAKTE GRENZWERTE) ---
 cape_levels = [0, 25, 50, 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 10000]
 cape_colors = [
@@ -53,31 +73,17 @@ cape_colors = [
 cmap_cape = mcolors.ListedColormap(cape_colors)
 norm_cape = mcolors.BoundaryNorm(cape_levels, cmap_cape.N)
 
-# --- ORIGINAL DWD RADAR-SKALA (HARTE SCHWELLENWERTE) ---
+# --- RADAR (ORIGINAL DWD FARBPROFIL) ---
 radar_levels = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80]
 radar_colors = [
-    '#FFFFFF', # 0-5: Nichts
-    '#B0E0E6', # 5-10: Sehr helles Blau (Nieselregen)
-    '#00BFFF', # 10-15: Hellblau
-    '#0000FF', # 15-20: Blau (Leichter Regen)
-    '#00FF00', # 20-25: Hellgrün
-    '#32CD32', # 25-30: Grün (Mäßiger Regen)
-    '#008000', # 30-35: Dunkelgrün
-    '#FFFF00', # 35-40: Gelb (Starker Landregen)
-    '#FFA500', # 40-45: Orange (Konvektion beginnt)
-    '#FF0000', # 45-50: Rot (Gewitter)
-    '#8B0000', # 50-55: Dunkelrot (Starkgewitter)
-    '#FF00FF', # 55-60: Magenta (Hagel / extremer Starkregen)
-    '#800080', # 60-65: Lila
-    '#4B0082', # 65-70: Dunkellila (Superzelle)
-    '#E6E6FA'  # 70+: Weiß/Hellgrau (Extremer Hagel / Tornado-Signatur)
+    '#FFFFFF', '#B0E0E6', '#00BFFF', '#0000FF', '#00FF00', '#32CD32', '#008000', 
+    '#FFFF00', '#FFA500', '#FF0000', '#8B0000', '#FF00FF', '#800080', '#4B0082', '#E6E6FA'
 ]
 cmap_radar = mcolors.ListedColormap(radar_colors)
 norm_radar = mcolors.BoundaryNorm(radar_levels, cmap_radar.N)
 
-# --- UNWETTER-INDIZES & PARAMETER ---
+# --- WEITERE UNWETTER-SKALEN ---
 cmap_cin = mcolors.LinearSegmentedColormap.from_list("cin", ['#FFFFFF', '#ADD8E6', '#0000FF', '#00008B', '#000000'], N=256)
-cmap_precip = mcolors.LinearSegmentedColormap.from_list("precip", ['#FFFFFF', '#ADD8E6', '#0000FF', '#800080', '#8B0000'], N=256)
 cmap_clouds = mcolors.LinearSegmentedColormap.from_list("clouds", ['#1E90FF', '#87CEEB', '#D3D3D3', '#FFFFFF'], N=256)
 cmap_relhum = mcolors.LinearSegmentedColormap.from_list("relhum", ['#8B4513', '#F4A460', '#FFFFE0', '#90EE90', '#008000', '#0000FF'], N=256)
 cmap_snow = mcolors.LinearSegmentedColormap.from_list("snow", ['#CCFFCC', '#FFFFFF', '#ADD8E6', '#0000FF', '#800080'], N=256)
@@ -142,7 +148,7 @@ def get_valid_params(model):
     return base
 
 def estimate_latest_run(model, now_utc):
-    """Schätzt den aktuellsten fertigen Modelllauf ab (inkl. Rechenverzögerung des Servers)."""
+    """Schätzt den aktuellsten fertigen Modelllauf ab."""
     if "RUC" in model:
         return now_utc.replace(minute=0, second=0, microsecond=0) - timedelta(hours=2)
     elif "D2" in model or "EU" in model:
@@ -171,13 +177,11 @@ with st.sidebar:
     
     with st.expander("🗺️ 2. Karten-Ausschnitt", expanded=False):
         valid_regions = get_valid_regions(sel_model)
-        # Nicht unterstützte Regionen werden mit einem "Verboten"-Schild versehen (Ausgegraut)
         formatted_regions = [r if r in valid_regions else f"{r}  🚫 (ausgegraut)" for r in ALL_REGIONS]
         sel_region_raw = st.radio("Region", formatted_regions, label_visibility="collapsed")
     
     with st.expander("🌪️ 3. Parameter wählen", expanded=True):
         valid_params = get_valid_params(sel_model)
-        # Nicht unterstützte Parameter werden "ausgegraut" markiert
         formatted_params = [p if p in valid_params else f"{p}  🚫 (ausgegraut)" for p in ALL_PARAMS]
         sel_param_raw = st.radio("Parameter", formatted_params, label_visibility="collapsed")
     
@@ -188,7 +192,6 @@ with st.sidebar:
         elif "ECMWF" in sel_model: hours = list(range(3, 147, 3))
         else: hours = list(range(1, 49))
         
-        # Absolute Zeitberechnung für das Dropdown
         now_utc = datetime.now(timezone.utc)
         base_run = estimate_latest_run(sel_model, now_utc)
         
@@ -198,7 +201,8 @@ with st.sidebar:
             target_dt_loc = target_dt_utc.astimezone(LOCAL_TZ)
             tz_str = "MESZ" if target_dt_loc.dst() else "MEZ"
             wt = WOCHENTAGE[target_dt_loc.weekday()]
-            time_str = f"+{h}h  ({wt}, {target_dt_loc.strftime('%d.%m. %H:%00')} {tz_str})"
+            # FIX: %H:00 statt %H:%00 für korrekte Uhrzeit-Anzeige
+            time_str = f"+{h}h  ({wt}, {target_dt_loc.strftime('%d.%m. %H:00')} {tz_str})"
             hour_labels.append(time_str)
             
         sel_hour_str = st.radio("Zeit", hour_labels, label_visibility="collapsed")
@@ -208,16 +212,15 @@ with st.sidebar:
     st.markdown("---")
     generate = st.button("🚀 Profi-Karte generieren", use_container_width=True)
 
-# BLOCKER: Falls ein ausgegrautes Element gewählt wurde, Lauf abbrechen!
+# BLOCKER-LOGIK
 if generate:
     if "🚫" in sel_region_raw:
-        st.warning(f"Die Region '{sel_region_raw.replace('  🚫 (ausgegraut)', '')}' wird vom {sel_model} nicht abgedeckt. Bitte wechsle die Region oder das Modell.")
+        st.warning(f"Die Region '{sel_region_raw.replace('  🚫 (ausgegraut)', '')}' wird vom {sel_model} nicht abgedeckt.")
         st.stop()
     if "🚫" in sel_param_raw:
-        st.warning(f"Der Parameter '{sel_param_raw.replace('  🚫 (ausgegraut)', '')}' wird vom {sel_model} nicht berechnet. Bitte wähle einen anderen Parameter.")
+        st.warning(f"Der Parameter '{sel_param_raw.replace('  🚫 (ausgegraut)', '')}' existiert bei {sel_model} nicht.")
         st.stop()
 
-# Wir bereinigen die Strings für die Fetch-Engine
 sel_region = sel_region_raw.replace("  🚫 (ausgegraut)", "")
 sel_param = sel_param_raw.replace("  🚫 (ausgegraut)", "")
 
@@ -242,7 +245,7 @@ def fetch_meteo_data(model, param, hr):
     now = datetime.now(timezone.utc)
     headers = {'User-Agent': 'Mozilla/5.0'}
 
-    # --- A: DWD LOGIK (D2, RUC, EU, Global) ---
+    # --- A: DWD LOGIK ---
     if "ICON" in model:
         is_ruc = "RUC" in model
         is_global = "Global" in model
@@ -376,7 +379,7 @@ if generate:
         ax.add_feature(states, linewidth=0.5, edgecolor='black', zorder=12)
 
         # ----------------------------------------------------------------------
-        # PLOTTING-LOGIK
+        # PLOTTING-LOGIK FÜR 22 PARAMETER
         # ----------------------------------------------------------------------
         if "Temperatur" in sel_param or "850 hPa Temp." in sel_param or "Taupunkt" in sel_param:
             val_c = data - 273.15 if data.max() > 100 else data
@@ -397,8 +400,9 @@ if generate:
             plt.colorbar(im, label="Radar-Reflektivität in dBZ", shrink=0.4, ticks=[0, 15, 30, 45, 60, 75])
             
         elif "Niederschlag" in sel_param:
-            im = ax.pcolormesh(lons, lats, data, cmap=cmap_precip, norm=mcolors.Normalize(vmin=0.1, vmax=50), shading='auto', zorder=5)
-            plt.colorbar(im, label="Niederschlagssumme in mm", shrink=0.4)
+            # WICHTIG: norm=Normalize(vmin=0, vmax=100), da die neue Farbskala relativ dazu arbeitet!
+            im = ax.pcolormesh(lons, lats, data, cmap=cmap_precip, norm=mcolors.Normalize(vmin=0, vmax=100), shading='auto', zorder=5)
+            plt.colorbar(im, label="Niederschlagssumme in mm", shrink=0.4, ticks=[0.5, 5, 20, 50, 100])
             
         elif "Gesamtbedeckung" in sel_param:
             im = ax.pcolormesh(lons, lats, data, cmap=cmap_clouds, norm=mcolors.Normalize(vmin=0, vmax=100), shading='auto', zorder=5)
@@ -441,7 +445,7 @@ if generate:
             
         elif "Wolkenobergrenze" in sel_param:
             im = ax.pcolormesh(lons, lats, data, cmap='Blues', norm=mcolors.Normalize(vmin=0, vmax=13000), shading='auto', zorder=5)
-            plt.colorbar(im, label="Wolkenobergrenze in m (Höhere Wolken = stärkere Gewitter)", shrink=0.4)
+            plt.colorbar(im, label="Wolkenobergrenze in m", shrink=0.4)
             
         elif "Spezifische Feuchte" in sel_param:
             im = ax.pcolormesh(lons, lats, data * 1000, cmap='YlGnBu', norm=mcolors.Normalize(vmin=0, vmax=20), shading='auto', zorder=5)
@@ -457,7 +461,7 @@ if generate:
             
         elif "Lifted Index" in sel_param:
             im = ax.pcolormesh(lons, lats, data, cmap=cmap_lifted, norm=mcolors.Normalize(vmin=-10, vmax=10), shading='auto', zorder=5)
-            plt.colorbar(im, label="Lifted Index in K (Blau=Stabil, Rot/Magenta=Gewitter)", shrink=0.4)
+            plt.colorbar(im, label="Lifted Index in K (Blau=Stabil, Rot=Gewitter)", shrink=0.4)
             
         elif "Signifikantes Wetter" in sel_param:
             grid = np.zeros_like(data)
@@ -465,7 +469,7 @@ if generate:
                 for code in codes: grid[data == code] = i
             ax.pcolormesh(lons, lats, grid, cmap=cmap_ww, shading='nearest', zorder=5)
             patches = [mpatches.Patch(color=c, label=l) for l, (c, _) in WW_LEGEND_DATA.items()]
-            ax.legend(handles=patches, loc='lower left', title="Wetter-Klassifikation", fontsize='6', title_fontsize='7', framealpha=0.9).set_zorder(25)
+            ax.legend(handles=patches, loc='lower left', title="Wetter", fontsize='6', title_fontsize='7', framealpha=0.9).set_zorder(25)
 
         # ----------------------------------------------------------------------
         # ISOBAREN OVERLAY
@@ -483,11 +487,12 @@ if generate:
         v_dt_loc = v_dt_utc.astimezone(LOCAL_TZ)
         tz_str = "MESZ" if v_dt_loc.dst() else "MEZ"
         
-        info_txt = f"Modell: {sel_model}\nParameter: {sel_param}\nTermin: {v_dt_loc.strftime('%d.%m.%Y %H:%00')} {tz_str}\nModell-Lauf: {run_id[-2:]}Z"
+        # %H:00 repariert (ohne das extra % vor der Null)
+        info_txt = f"Modell: {sel_model}\nParameter: {sel_param}\nTermin: {v_dt_loc.strftime('%d.%m.%Y %H:00')} {tz_str}\nModell-Lauf: {run_id[-2:]}Z"
         ax.text(0.02, 0.98, info_txt, transform=ax.transAxes, fontsize=7, fontweight='bold', va='top', bbox=dict(facecolor='white', alpha=0.8, boxstyle='round,pad=0.3', edgecolor='gray'), zorder=30)
 
         st.pyplot(fig)
         cleanup_temp_files()
         
     else:
-        st.error(f"⚠️ Schwerer Datenfehler: {sel_model} liefert für '{sel_param}' (+{sel_hour}h) aktuell keine Daten aus. Versuch eine andere Uhrzeit.")
+        st.error(f"⚠️ Schwerer Datenfehler: {sel_model} liefert für '{sel_param}' (+{sel_hour}h) aktuell keine Daten aus.")
