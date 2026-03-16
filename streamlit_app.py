@@ -9,14 +9,12 @@ import matplotlib.colors as mcolors
 import matplotlib.patches as mpatches
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+import cartopy.io.img_tiles as cimgt  # NEU: Erlaubt das Einbetten von Karten-Tiles (RainViewer)
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import numpy as np
-
-# NEUE IMPORTS FÜR DAS DWD ECHTZEIT-RADAR
 import gzip
 import re
-import traceback
 
 # Optional: Streamlit Autorefresh für das Live-Radar
 try:
@@ -34,10 +32,6 @@ st.set_page_config(
 )
 
 def cleanup_temp_files():
-    """
-    Räumt temporäre Dateien auf, die beim Herunterladen und Entpacken 
-    der GRIB-Daten entstehen, um Speicherlecks zu vermeiden.
-    """
     temp_files = [
         "temp.grib", 
         "temp_gfs.grib", 
@@ -49,8 +43,8 @@ def cleanup_temp_files():
         if os.path.exists(file):
             try: 
                 os.remove(file)
-            except Exception as e: 
-                pass # Silent fail, falls Datei noch im Zugriff ist
+            except Exception: 
+                pass
 
 LOCAL_TZ = ZoneInfo("Europe/Berlin")
 WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
@@ -58,7 +52,6 @@ WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 # ==============================================================================
 # 2. MASTER-FARBSKALEN
 # ==============================================================================
-# Temperatur-Farbskala (-30 bis +30 Grad Celsius)
 temp_colors = [
     (0.0, '#D3D3D3'), (5/60, '#FFFFFF'), (10/60, '#FFC0CB'), (15/60, '#FF00FF'),
     (20/60, '#800080'), (20.01/60, '#00008B'), (25/60, '#0000CD'), (29.99/60, '#ADD8E6'),
@@ -67,7 +60,6 @@ temp_colors = [
 ]
 cmap_temp = mcolors.LinearSegmentedColormap.from_list("custom_temp", temp_colors)
 
-# DEINE EXAKTE HTML-FARBPALETTE FÜR NIEDERSCHLAG
 precip_values = [0, 0.2, 0.5, 1.0, 1.5, 2.0, 3, 4, 5, 8, 12, 15, 20, 30, 40, 50]
 precip_colors = [
     '#FFFFFF', '#87CEEB', '#1E90FF', '#191970', '#006400', '#32CD32', '#FFFF00', 
@@ -79,7 +71,6 @@ precip_anchors = [v / vmax_precip for v in precip_values]
 cmap_precip = mcolors.LinearSegmentedColormap.from_list("custom_precip", list(zip(precip_anchors, precip_colors)))
 norm_precip = mcolors.Normalize(vmin=0, vmax=vmax_precip)
 
-# AVIATION FLUGSICHERHEITS-SKALA (Wolkenuntergrenze)
 base_levels = [0, 100, 200, 300, 400, 500, 750, 1000, 1500, 2000, 3000, 8000]
 base_colors = [
     '#FF00FF', '#FF0000', '#FFA500', '#FFFF00', '#ADFF2F', '#32CD32', '#00BFFF', 
@@ -88,7 +79,6 @@ base_colors = [
 cmap_base = mcolors.ListedColormap(base_colors)
 norm_base = mcolors.BoundaryNorm(base_levels, cmap_base.N)
 
-# CAPE-Skala (Konvektive verfügbare potentielle Energie)
 cape_levels = [0, 25, 50, 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 10000]
 cape_colors = [
     '#006400', '#2E8B57', '#ADFF2F', '#FFFF00', '#FFB347', '#FFA500', 
@@ -97,7 +87,6 @@ cape_colors = [
 cmap_cape = mcolors.ListedColormap(cape_colors)
 norm_cape = mcolors.BoundaryNorm(cape_levels, cmap_cape.N)
 
-# RADAR-Reflektivität (dBZ)
 radar_levels = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80]
 radar_colors = [
     '#FFFFFF', '#B0E0E6', '#00BFFF', '#0000FF', '#00FF00', '#32CD32', '#008000', 
@@ -106,7 +95,6 @@ radar_colors = [
 cmap_radar = mcolors.ListedColormap(radar_colors)
 norm_radar = mcolors.BoundaryNorm(radar_levels, cmap_radar.N)
 
-# Weitere Hilfsskalen
 cmap_cin = mcolors.LinearSegmentedColormap.from_list("cin", ['#FFFFFF', '#ADD8E6', '#0000FF', '#00008B', '#000000'], N=256)
 cmap_clouds = mcolors.LinearSegmentedColormap.from_list("clouds", ['#1E90FF', '#87CEEB', '#D3D3D3', '#FFFFFF'], N=256)
 cmap_relhum = mcolors.LinearSegmentedColormap.from_list("relhum", ['#8B4513', '#F4A460', '#FFFFE0', '#90EE90', '#008000', '#0000FF'], N=256)
@@ -118,7 +106,6 @@ cmap_heli = mcolors.LinearSegmentedColormap.from_list("heli", ['#FFFFFF', '#00FF
 cmap_lifted = mcolors.LinearSegmentedColormap.from_list("lifted", ['#FF00FF', '#FF0000', '#FFA500', '#FFFF00', '#00FF00', '#0000FF'], N=256)
 cmap_sun = mcolors.LinearSegmentedColormap.from_list("sun", ['#808080', '#FFD700', '#FFA500', '#FF8C00'], N=256)
 
-# Signifikantes Wetter Legenden-Daten
 WW_LEGEND_DATA = {
     "Nebel": ("#FFFF00", list(range(40, 50))),
     "Regen leicht": ("#00FF00", [50, 51, 58, 60, 80]),
@@ -137,10 +124,14 @@ WW_LEGEND_DATA = {
 cmap_ww = mcolors.ListedColormap(['#FFFFFF00'] + [c for l, (c, codes) in WW_LEGEND_DATA.items()])
 
 # ==============================================================================
-# 3. DAS EISERNE ROUTING-SYSTEM (JETZT MIT ECHTZEIT RADAR)
+# 3. DAS EISERNE ROUTING-SYSTEM
 # ==============================================================================
 MODEL_ROUTER = {
-    "DWD Echtzeit-Radar": {
+    "RainViewer Echtzeit-Radar": {
+        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Europa"],
+        "params": ["Echtzeit-Radar (Reflektivität)"]
+    },
+    "DWD Echtzeit-Radar (Rohdaten)": {
         "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)"],
         "params": ["Echtzeit-Radar (Reflektivität)"]
     },
@@ -186,9 +177,6 @@ MODEL_ROUTER = {
 }
 
 def estimate_latest_run(model, now_utc):
-    """
-    Ermittelt den aktuellsten verfügbaren Modelllauf basierend auf festen Update-Zyklen.
-    """
     if "D2" in model or "EU" in model:
         run_h = ((now_utc.hour - 3) // 3) * 3
         if run_h < 0: return (now_utc - timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0)
@@ -204,106 +192,81 @@ def estimate_latest_run(model, now_utc):
     return now_utc
 
 # ==============================================================================
-# 4. HOCHROBUSTES DWD ECHTZEIT-RADAR MODUL (WN-KOMPOSIT)
+# 4. RADAR ENGINE: RAINVIEWER (API) & DWD (BINÄR-FIX)
 # ==============================================================================
-def get_dwd_radar_file_list(url_base):
+class RainViewerTiles(cimgt.GoogleWTS):
     """
-    Holt die HTML-Verzeichnisliste vom DWD-Server und extrahiert alle 
-    verfügbaren WN-Kompositdateien (Binärformat, gepackt als .gz).
+    Spezielle Cartopy-Klasse, die das Radar-Mosaik der RainViewer API abgreift.
+    Dies ist eine extrem stabile, hochauflösende Alternative zum DWD.
     """
+    def __init__(self, host, path):
+        self.host = host
+        self.path = path
+        super().__init__()
+
+    def _image_url(self, tile):
+        x, y, z = tile
+        # Farbschema 2 (Meteo), Glättung 1, Schnee 1
+        return f"{self.host}{self.path}/256/{z}/{x}/{y}/2/1_1.png"
+
+def fetch_rainviewer_metadata():
+    """Holt den aktuellsten Zeitstempel und Pfad vom RainViewer-Server."""
     try:
-        response = requests.get(url_base, timeout=10)
-        response.raise_for_status()
-        # Suche nach Dateinamen-Muster in den href-Attributen
-        file_pattern = re.compile(r'href="(raa01-wn_10000-[0-9]{10}-dwd---bin\.gz)"')
-        files = file_pattern.findall(response.text)
-        return sorted(list(set(files)))
-    except requests.exceptions.RequestException as e:
-        st.error(f"⚠️ DWD Server nicht erreichbar: {e}")
-        return []
+        r = requests.get("https://api.rainviewer.com/public/weather-maps.json", timeout=10)
+        data = r.json()
+        host = data.get("host", "https://tilecache.rainviewer.com")
+        past = data.get("radar", {}).get("past", [])
+        if past:
+            latest = past[-1]
+            return host, latest["path"], str(latest["time"]), [f"RainViewer API: {latest['path']}"]
+    except Exception as e:
+        return None, None, None, [str(e)]
+    return None, None, None, ["RainViewer keine Daten."]
 
-def extract_dwd_radar_timestamp(filename):
+def fetch_dwd_radar_raw(debug=False):
     """
-    Extrahiert den exakten Zeitstempel (YYMMDDHHMM) aus dem DWD-Dateinamen.
-    """
-    match = re.search(r'-([0-9]{10})-dwd', filename)
-    if match:
-        return match.group(1)
-    return datetime.now(timezone.utc).strftime("%y%m%d%H%M")
-
-def generate_dwd_radar_grid():
-    """
-    Generiert das statische geografische Gitter für das DWD WN-Radarprodukt.
-    Das WN-Produkt ist eine stereografische Projektion, wir nähern es hier 
-    für PlateCarree durch eine direkte Matrixzuweisung an.
-    """
-    # Deutschland-Grid für WN-Produkt (900x900 Pixel)
-    lons_1d = np.linspace(2.0, 16.0, 900)
-    lats_1d = np.linspace(46.0, 56.0, 900)
-    lons_grid, lats_grid = np.meshgrid(lons_1d, lats_1d)
-    return lons_grid, lats_grid
-
-def fetch_live_radar_data(debug=False):
-    """
-    Hauptfunktion zum Herunterladen, Entpacken und Decodieren des binären 
-    DWD WN-Radarprodukts (Reflektivität in dBZ). 
-    Enthält massives Error-Handling und Fallbacks für maximale Stabilität.
+    Holt DWD-Rohdaten und fixt den variablen Datei-Header,
+    indem es nach dem Hex-Code \x03 (End of Text) sucht.
     """
     url_base = "https://opendata.dwd.de/weather/radar/composit/wn/"
-    debug_logs = [f"Abfrage Radar-Basis-URL: {url_base}"]
-    
-    files = get_dwd_radar_file_list(url_base)
-    if not files:
-        return None, None, None, None, debug_logs
-    
-    # Wir iterieren rückwärts durch die neuesten Dateien. Oft ist die allerneueste 
-    # Datei gerade im Schreibvorgang auf dem DWD-Server (0 Bytes), daher der Fallback.
-    for latest_file in reversed(files[-5:]):
-        file_url = url_base + latest_file
-        debug_logs.append(f"Versuche Download: {file_url}")
+    logs = [f"Abfrage DWD Radar: {url_base}"]
+    try:
+        r_list = requests.get(url_base, timeout=10)
+        files = re.findall(r'href="(raa01-wn_10000-[0-9]{10}-dwd---bin\.gz)"', r_list.text)
+        if not files: return None, None, None, None, logs
         
-        try:
+        # Versuche die letzten 3 Dateien (falls die neueste noch geschrieben wird)
+        for latest_file in sorted(list(set(files)))[-3:]:
+            file_url = url_base + latest_file
+            logs.append(f"Download: {file_url}")
             r = requests.get(file_url, timeout=15)
-            if r.status_code == 200 and len(r.content) > 1000:
-                # Entpacken der GZ-Datei im Speicher
+            if r.status_code == 200:
                 with gzip.open(io.BytesIO(r.content), 'rb') as f:
-                    # Das DWD-Radardatenformat hat einen exakten 540-Byte Header (ASCII),
-                    # der übersprungen werden muss, um an die Rohdaten zu kommen.
-                    header = f.read(540)
+                    content = f.read()
                     
-                    # Die restlichen Daten sind ein flaches uint8 Array
-                    raw_binary_data = np.frombuffer(f.read(), dtype=np.uint8)
-                    
-                    # Das WN-Produkt MUSS exakt 900x900 = 810.000 Werte haben
-                    if len(raw_binary_data) >= 810000:
-                        data_2d = raw_binary_data[:810000].reshape(900, 900).astype(float)
+                    # DER ENTSCHEIDENDE FIX: Dynamische Header-Erkennung
+                    header_end = content.find(b'\x03')
+                    if header_end != -1:
+                        raw_data = np.frombuffer(content[header_end+1:], dtype=np.uint8)
                         
-                        # DWD Umrechnungsformel: Wert in dBZ = (Rohwert - 64) / 2.0
-                        # Werte unter 0 (Rauschen/Clutter) werden ausgeblendet.
-                        data_dbz = (data_2d - 64) / 2.0
-                        data_dbz[data_dbz < 0] = np.nan
-                        
-                        # Generieren der Koordinatenmatrizen
-                        lons, lats = generate_dwd_radar_grid()
-                        
-                        # Der DWD-Datensatz wird von Nord nach Süd geschrieben, 
-                        # Matplotlib erwartet Süd nach Nord. Daher Array spiegeln [::-1]
-                        data_dbz_flipped = data_dbz[::-1]
-                        
-                        timestamp = extract_dwd_radar_timestamp(latest_file)
-                        debug_logs.append(f"Erfolgreich decodiert. Zeitstempel: {timestamp}")
-                        
-                        return data_dbz_flipped, lons, lats, timestamp, debug_logs
-            else:
-                debug_logs.append(f"Datei unvollständig oder leer (Status {r.status_code}).")
-        except Exception as e:
-            debug_logs.append(f"Fehler bei {latest_file}: {str(e)}")
-            continue
-            
-    return None, None, None, None, debug_logs
+                        if len(raw_data) >= 810000:
+                            data_2d = raw_data[:810000].reshape(900, 900).astype(float)
+                            data_dbz = (data_2d - 64) / 2.0
+                            data_dbz[data_dbz < 0] = np.nan
+                            
+                            lons_1d = np.linspace(2.0, 16.0, 900)
+                            lats_1d = np.linspace(46.0, 56.0, 900)
+                            lons, lats = np.meshgrid(lons_1d, lats_1d)
+                            
+                            ts_match = re.search(r'-([0-9]{10})-dwd', latest_file)
+                            ts = ts_match.group(1) if ts_match else datetime.now().strftime("%y%m%d%H%M")
+                            return data_dbz[::-1], lons, lats, ts, logs
+    except Exception as e:
+        logs.append(str(e))
+    return None, None, None, None, logs
 
 # ==============================================================================
-# 5. DYNAMISCHE SIDEBAR MIT AUTO-REFRESH LOGIK
+# 5. DYNAMISCHE SIDEBAR
 # ==============================================================================
 with st.sidebar:
     st.header("🛰️ Modell-Zentrale")
@@ -313,7 +276,8 @@ with st.sidebar:
     
     with st.expander("🗺️ 2. Karten-Ausschnitt", expanded=False):
         valid_regions = MODEL_ROUTER[sel_model]["regions"]
-        sel_region = st.radio("Region", valid_regions, label_visibility="collapsed")
+        default_idx = valid_regions.index("Brandenburg/Berlin") if "Brandenburg/Berlin" in valid_regions else 0
+        sel_region = st.radio("Region", valid_regions, index=default_idx, label_visibility="collapsed")
     
     with st.expander("🌪️ 3. Parameter wählen", expanded=True):
         valid_params = MODEL_ROUTER[sel_model]["params"]
@@ -321,8 +285,7 @@ with st.sidebar:
     
     with st.expander("⏱️ 4. Vorhersage-Stunde (MEZ/MESZ)", expanded=True):
         if "Radar" in sel_model:
-            # Bei Live-Radar gibt es keine Vorhersagestunden, daher wird das UI angepasst.
-            st.info("Echtzeit-Daten: Die Zeitauswahl ist für das Live-Radar automatisch deaktiviert.")
+            st.info("Echtzeit-Daten: Die Zeitauswahl ist automatisch deaktiviert.")
             sel_hour = 0
             sel_hour_str = "Live"
         else:
@@ -347,35 +310,34 @@ with st.sidebar:
             sel_hour = int(sel_hour_str.split("h")[0].replace("+", ""))
     
     st.markdown("---")
-    # Isobaren und Gewitter-Schraffur machen beim Radar keinen Sinn bzw. stören
     show_isobars = st.checkbox("Isobaren (Luftdruck) einblenden", value=True)
-    show_storms = st.checkbox("⚡ Gewitter-Risiko rot schraffieren", value=True, help="Zieht rote, diagonale Linien über Gebiete, in denen das Modell Gewitter berechnet.")
+    show_storms = st.checkbox("⚡ Gewitter-Risiko rot schraffieren", value=True, help="Zieht rote Linien über Gewitter-Gebiete.")
     
-    st.markdown("---")
-    
-    # NEU: Auto-Refresh-Schalter für den perfekten Live-Betrieb des Radars
-    enable_refresh = st.checkbox("🔄 Auto-Update (5 Min.)", value=False, help="Aktualisiert die Karte vollautomatisch alle 5 Minuten. Ideal für das Live-Radar.")
+    # Auto-Update Schalter für das Live-Radar
+    enable_refresh = st.checkbox("🔄 Auto-Update (5 Min.)", value=False)
     if enable_refresh and st_autorefresh is not None:
-        # 300.000 Millisekunden = 5 Minuten
         st_autorefresh(interval=300000, key="auto_refresh_radar")
-    elif enable_refresh and st_autorefresh is None:
-        st.warning("Auto-Update nicht möglich. 'streamlit-autorefresh' Paket fehlt.")
         
     st.markdown("---")
     generate = st.button("🚀 Profi-Karte generieren", use_container_width=True)
     
     with st.expander("🛠️ Entwickler-Konsole"):
-        debug_mode = st.checkbox("URL-Ping aktivieren (Zeigt Live-Serveranfragen)")
+        debug_mode = st.checkbox("URL-Ping aktivieren")
 
 # ==============================================================================
-# 6. DATA FETCH ENGINE (GRIB + RADAR WEICHE)
+# 6. DATA FETCH ENGINE
 # ==============================================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_meteo_data(model, param, hr, debug=False):
-    # RADAR-INTERCEPTOR: Fängt Echtzeit-Radar ab, bevor die GRIB-Logik startet.
-    if "Radar" in model and "Echtzeit" in param:
-        r_data, r_lons, r_lats, r_ts, r_logs = fetch_live_radar_data(debug)
-        return r_data, r_lons, r_lats, r_ts, r_logs
+    # RADAR-ABFANGJÄGER
+    if "RainViewer" in model:
+        host, path, ts, logs = fetch_rainviewer_metadata()
+        if host and path:
+            return host, path, None, ts, logs
+        return None, None, None, None, logs
+    
+    if "DWD Echtzeit" in model:
+        return fetch_dwd_radar_raw(debug)
 
     dyn_cloud_base = "ceiling" if "D2" in model else "hbas_con"
     
@@ -493,21 +455,13 @@ def fetch_meteo_data(model, param, hr, debug=False):
 # ==============================================================================
 # 7. KARTENGENERATOR & PLOTTING
 # ==============================================================================
-# Die Karte wird generiert bei Klick auf den Button ODER wenn Auto-Update beim Radar anspringt
 if generate or (enable_refresh and "Radar" in sel_model):
     cleanup_temp_files()
     
     with st.spinner(f"🛰️ Lade {sel_param} aus {sel_model}..."):
-        # Normalen Datensatz (oder Radar) laden
         data, lons, lats, run_id, d_logs = fetch_meteo_data(sel_model, sel_param, sel_hour, debug_mode)
+        iso_data, ilons, ilats, _, _ = fetch_meteo_data(sel_model, "Isobaren", sel_hour) if show_isobars and "Radar" not in sel_model else (None, None, None, None, None)
         
-        # Isobaren Overlay (Macht beim Echtzeitradar keinen Sinn, daher wird es unterdrückt)
-        if show_isobars and "Radar" not in sel_model:
-            iso_data, ilons, ilats, _, _ = fetch_meteo_data(sel_model, "Isobaren", sel_hour) 
-        else:
-            iso_data, ilons, ilats = None, None, None
-            
-        # HEIMLICHER GEWITTER-DOWNLOAD (Nur wenn Schalter aktiv und Parameter im Modell verfügbar)
         ww_data = None
         if show_storms and "Radar" not in sel_model and sel_param != "Signifikantes Wetter" and "Signifikantes Wetter" in MODEL_ROUTER[sel_model]["params"]:
             ww_data, wlons, wlats, _, _ = fetch_meteo_data(sel_model, "Signifikantes Wetter", sel_hour, False)
@@ -551,12 +505,20 @@ if generate or (enable_refresh and "Radar" in sel_model):
             plt.colorbar(im, label="CIN (Hemmung/Deckel) in J/kg", shrink=0.4)
             
         elif "Radar" in sel_param: 
-            # Die gleiche Skala wird nun für "Simuliertes Radar" und das neue "Echtzeit-Radar" genutzt!
-            im = ax.pcolormesh(lons, lats, data, cmap=cmap_radar, norm=norm_radar, shading='auto', zorder=5)
-            plt.colorbar(im, label="Radar-Reflektivität in dBZ", shrink=0.4, ticks=[0, 15, 30, 45, 60, 75])
-            if "Echtzeit" in sel_param:
-                # Kleiner Hinweis für das Live-Radar bezüglich der minimalen Projektionsabweichung
-                ax.text(0.5, 0.01, "Echtzeit WN-Produkt", transform=ax.transAxes, fontsize=6, color='black', ha='center', zorder=30)
+            if "RainViewer" in sel_model:
+                # Host und Path wurden per Funktion elegant als "data" und "lons" durchgereicht
+                rv_tiles = RainViewerTiles(host=data, path=lons)
+                zoom_l = {"Deutschland": 6, "Brandenburg/Berlin": 8, "Mitteleuropa (DE, PL)": 6, "Alpenraum": 7, "Europa": 5}
+                ax.add_image(rv_tiles, zoom_l.get(sel_region, 6), zorder=5)
+                
+                # Legende erzeugen, damit man die dBZ-Werte ablesen kann
+                sm = plt.cm.ScalarMappable(cmap=cmap_radar, norm=norm_radar)
+                sm.set_array([])
+                plt.colorbar(sm, label="Radar-Reflektivität in dBZ (RainViewer-Farben)", shrink=0.4)
+            else:
+                # Normales DWD-Rohdaten Raster
+                im = ax.pcolormesh(lons, lats, data, cmap=cmap_radar, norm=norm_radar, shading='auto', zorder=5)
+                plt.colorbar(im, label="Radar-Reflektivität in dBZ", shrink=0.4, ticks=[0, 15, 30, 45, 60, 75])
             
         elif "Niederschlag" in sel_param:
             im = ax.pcolormesh(lons, lats, data, cmap=cmap_precip, norm=norm_precip, shading='auto', zorder=5)
@@ -634,14 +596,10 @@ if generate or (enable_refresh and "Radar" in sel_model):
         # DIE ROTE GEWITTER-SCHRAFFUR OVERLAY (//////)
         # ----------------------------------------------------------------------
         if show_storms and ww_data is not None:
-            # Maske bauen: Gewitter-Codes (95=leicht, 96/97/99=mäßig bis schwer)
             storm_mask = np.isin(ww_data, [95, 96, 97, 99])
-            
             if np.any(storm_mask):
                 plot_ww = np.zeros_like(ww_data)
                 plot_ww[storm_mask] = 1 
-                
-                # Macht die diagonalen Striche fett und rot sichtbar!
                 plt.rcParams['hatch.linewidth'] = 2.0 
                 ax.contourf(wlons, wlats, plot_ww, levels=[0.5, 1.5], colors='none', hatches=['////'], edgecolors='red', zorder=10)
 
@@ -655,19 +613,20 @@ if generate or (enable_refresh and "Radar" in sel_model):
             ax.clabel(cs, inline=True, fontsize=8, fmt='%1.0f')
 
         # ----------------------------------------------------------------------
-        # HEADER INFO (FÜR RADAR UND MODELLE GETRENNT)
+        # HEADER INFO
         # ----------------------------------------------------------------------
         if "Radar" in sel_model:
-            # Timestamp Parsing für DWD Radar (Format: YYMMDDHHMM)
             try:
-                dt_obj = datetime.strptime(run_id, "%y%m%d%H%M").replace(tzinfo=timezone.utc)
+                if "RainViewer" in sel_model:
+                    dt_obj = datetime.fromtimestamp(int(run_id), tz=timezone.utc)
+                else:
+                    dt_obj = datetime.strptime(run_id, "%y%m%d%H%M").replace(tzinfo=timezone.utc)
                 dt_loc = dt_obj.astimezone(LOCAL_TZ)
                 time_display = dt_loc.strftime('%d.%m.%Y %H:%M') + (" MESZ" if dt_loc.dst() else " MEZ")
-            except:
-                time_display = run_id # Fallback
-            info_txt = f"Modell: {sel_model}\nParameter: {sel_param}\nLive-Stand: {time_display}\n(Aktualisiert automatisch)"
+            except Exception:
+                time_display = run_id
+            info_txt = f"Modell: {sel_model}\nParameter: {sel_param}\nLive-Stand: {time_display}\n(Quelle: {'RainViewer' if 'RainViewer' in sel_model else 'DWD OpenData'})"
         else:
-            # Herkömmliche Modell-Zeitrechnung
             v_dt_utc = datetime.strptime(run_id, "%Y%m%d%H").replace(tzinfo=timezone.utc) + timedelta(hours=sel_hour)
             v_dt_loc = v_dt_utc.astimezone(LOCAL_TZ)
             tz_str = "MESZ" if v_dt_loc.dst() else "MEZ"
@@ -698,9 +657,6 @@ if generate or (enable_refresh and "Radar" in sel_model):
         cleanup_temp_files()
         
     else:
-        st.error(f"⚠️ Keine Daten für '{sel_param}' verfügbar.")
-        if "Radar" in sel_model:
-            st.info("💡 Das DWD Radar wird eventuell gerade serverseitig aktualisiert. Warte kurz und lade neu.")
-        else:
-            st.info("💡 Tipp: Versuch eine etwas spätere Vorhersagestunde oder aktiviere links die 'Entwickler-Konsole', um die Pings zu prüfen!")
+        st.error(f"⚠️ Aktuell liefert der gewählte Server keine Daten für '{sel_param}'.")
+        st.info("💡 Wenn das DWD-Radar hakt, schalte im Menü links einfach auf 'RainViewer Echtzeit-Radar' um!")
 
