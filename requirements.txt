@@ -1,7 +1,9 @@
 streamlit
 xarray
-cfgrib
-cartopy
-matplotlib
 requests
+matplotlib
+cartopy
 numpy
+cfgrib
+folium
+streamlit-folium
