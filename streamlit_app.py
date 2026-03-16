@@ -43,25 +43,25 @@ temp_colors = [
 ]
 cmap_temp = mcolors.LinearSegmentedColormap.from_list("custom_temp", temp_colors)
 
-# --- NIEDERSCHLAG (DEINE PROFISCH-ABGEMISCHTE SKALA MIT GAMMA-KORREKTUR) ---
+# --- NIEDERSCHLAG (DEINE EIGENEN FARBEN - HELLER & FLÜSSIG) ---
 precip_values = [0, 0.5, 1, 2, 3, 5, 10, 20, 30, 40, 50, 75, 100]
 precip_colors = [
     '#FFFFFF', # 0: weiß
-    '#B3E5FC', # 0.5: hellblau (sattes eisblau)
-    '#0288D1', # 1: dunkelblau
-    '#2E7D32', # 2: dunkelgrün (professionelles Waldgrün)
-    '#FBC02D', # 3: gelb (kräftig)
-    '#F57C00', # 5: orange
-    '#D32F2F', # 10: rot
-    '#880E4F', # 20: dunkelrot (Bordeaux)
-    '#7B1FA2', # 30: lila
-    '#E040FB', # 40: magenta
-    '#F8BBD0', # 50: rosa
-    '#FAFAFA', # 75: fast-weiß (leichtes Grau-Weiß zur Abgrenzung von der 0)
-    '#757575'  # 100: grau
+    '#ADD8E6', # 0.5: hellblau
+    '#4169E1', # 1: royalblue (helleres dunkelblau, hebt sich gut ab)
+    '#228B22', # 2: forestgreen (helleres dunkelgrün, frischerer Übergang)
+    '#FFFF00', # 3: gelb
+    '#FFA500', # 5: orange
+    '#FF0000', # 10: rot
+    '#8B0000', # 20: dunkelrot
+    '#800080', # 30: lila
+    '#FF00FF', # 40: magenta
+    '#FFC0CB', # 50: rosa
+    '#FAFAFA', # 75: fast-weiß (minimales Off-White, damit es nicht mit 0 verschwimmt)
+    '#808080'  # 100: grau
 ]
-# Gamma 0.5 (Wurzelfunktion) streckt den Bereich von 0-10 extrem, 
-# damit er auf der Skala nicht zerquetscht wird!
+
+# Gamma-Korrektur (0.5), damit die Skala für die kleinen Werte gestreckt bleibt und gut lesbar ist!
 gamma_precip = 0.5
 precip_anchors = [(v / 100.0)**gamma_precip for v in precip_values]
 cmap_precip = mcolors.LinearSegmentedColormap.from_list("custom_precip", list(zip(precip_anchors, precip_colors)))
@@ -383,9 +383,8 @@ if generate:
             plt.colorbar(im, label="Radar-Reflektivität in dBZ", shrink=0.4, ticks=[0, 15, 30, 45, 60, 75])
             
         elif "Niederschlag" in sel_param:
-            # WICHTIG: norm=norm_precip wendet die Gamma-Korrektur an, damit die 0-10 mm super sichtbar werden!
+            # Deine angepasste Farbpalette kommt jetzt absolut flüssig auf die Karte!
             im = ax.pcolormesh(lons, lats, data, cmap=cmap_precip, norm=norm_precip, shading='auto', zorder=5)
-            # Genau deine gewünschten Ticks!
             ticks_precip = [0, 2, 4, 6, 8, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
             plt.colorbar(im, label="Niederschlagssumme in mm", shrink=0.4, ticks=ticks_precip)
             
