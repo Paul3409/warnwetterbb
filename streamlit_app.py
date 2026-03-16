@@ -19,14 +19,11 @@ import numpy as np
 st.set_page_config(page_title="WarnwetterBB | Pro-Zentrale", layout="wide", initial_sidebar_state="expanded")
 
 def cleanup_temp_files():
-    """Aggressive Bereinigung aller temporären GRIB-Reste auf dem Server (Memory-Leak Schutz)."""
     temp_files = ["temp.grib", "temp_gfs.grib", "temp_ecmwf.grib", "temp.grib.idx", "temp_gfs.grib.idx"]
     for file in temp_files:
         if os.path.exists(file):
-            try:
-                os.remove(file)
-            except Exception:
-                pass
+            try: os.remove(file)
+            except: pass
 
 LOCAL_TZ = ZoneInfo("Europe/Berlin")
 WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
@@ -34,8 +31,6 @@ WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 # ==============================================================================
 # 2. MASTER-FARBSKALEN
 # ==============================================================================
-
-# --- TEMPERATUR (Glatter 10er Übergang) ---
 temp_colors = [
     (0.0, '#D3D3D3'), (5/60, '#FFFFFF'), (10/60, '#FFC0CB'), (15/60, '#FF00FF'),
     (20/60, '#800080'), (20.01/60, '#00008B'), (25/60, '#0000CD'), (29.99/60, '#ADD8E6'),
@@ -44,7 +39,7 @@ temp_colors = [
 ]
 cmap_temp = mcolors.LinearSegmentedColormap.from_list("custom_temp", temp_colors)
 
-# --- NIEDERSCHLAG (DEINE EXAKTE HTML-FARBPALETTE) ---
+# DEINE EXAKTE HTML-FARBPALETTE
 precip_values = [0, 0.2, 0.5, 1.0, 1.5, 2.0, 3, 4, 5, 8, 12, 15, 20, 30, 40, 50]
 precip_colors = [
     '#FFFFFF', '#87CEEB', '#1E90FF', '#191970', '#006400', '#32CD32', '#FFFF00', 
@@ -56,25 +51,15 @@ precip_anchors = [v / vmax_precip for v in precip_values]
 cmap_precip = mcolors.LinearSegmentedColormap.from_list("custom_precip", list(zip(precip_anchors, precip_colors)))
 norm_precip = mcolors.Normalize(vmin=0, vmax=vmax_precip)
 
-# --- WOLKENUNTERGRENZE (AVIATION / FLUGSICHERHEITS-SKALA) ---
+# AVIATION FLUGSICHERHEITS-SKALA
 base_levels = [0, 100, 200, 300, 400, 500, 750, 1000, 1500, 2000, 3000, 8000]
 base_colors = [
-    '#FF00FF', # 0-100m: Magenta (Bodenaufliegend)
-    '#FF0000', # 100-200m: Rot
-    '#FFA500', # 200-300m: Orange
-    '#FFFF00', # 300-400m: Gelb
-    '#ADFF2F', # 400-500m: Helles Grün
-    '#32CD32', # 500-750m: Grün
-    '#00BFFF', # 750-1000m: Hellblau
-    '#1E90FF', # 1000-1500m: Blau
-    '#0000FF', # 1500-2000m: Dunkelblau
-    '#A9A9A9', # 2000-3000m: Grau
-    '#FFFFFF'  # >3000m: Weiß (Unbedenklich)
+    '#FF00FF', '#FF0000', '#FFA500', '#FFFF00', '#ADFF2F', '#32CD32', '#00BFFF', 
+    '#1E90FF', '#0000FF', '#A9A9A9', '#FFFFFF'
 ]
 cmap_base = mcolors.ListedColormap(base_colors)
 norm_base = mcolors.BoundaryNorm(base_levels, cmap_base.N)
 
-# --- CAPE (EXAKTE GRENZWERTE) ---
 cape_levels = [0, 25, 50, 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 10000]
 cape_colors = [
     '#006400', '#2E8B57', '#ADFF2F', '#FFFF00', '#FFB347', '#FFA500', 
@@ -83,7 +68,6 @@ cape_colors = [
 cmap_cape = mcolors.ListedColormap(cape_colors)
 norm_cape = mcolors.BoundaryNorm(cape_levels, cmap_cape.N)
 
-# --- RADAR (ORIGINAL DWD FARBPROFIL) ---
 radar_levels = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80]
 radar_colors = [
     '#FFFFFF', '#B0E0E6', '#00BFFF', '#0000FF', '#00FF00', '#32CD32', '#008000', 
@@ -92,7 +76,6 @@ radar_colors = [
 cmap_radar = mcolors.ListedColormap(radar_colors)
 norm_radar = mcolors.BoundaryNorm(radar_levels, cmap_radar.N)
 
-# --- WEITERE UNWETTER-SKALEN ---
 cmap_cin = mcolors.LinearSegmentedColormap.from_list("cin", ['#FFFFFF', '#ADD8E6', '#0000FF', '#00008B', '#000000'], N=256)
 cmap_clouds = mcolors.LinearSegmentedColormap.from_list("clouds", ['#1E90FF', '#87CEEB', '#D3D3D3', '#FFFFFF'], N=256)
 cmap_relhum = mcolors.LinearSegmentedColormap.from_list("relhum", ['#8B4513', '#F4A460', '#FFFFE0', '#90EE90', '#008000', '#0000FF'], N=256)
@@ -104,7 +87,6 @@ cmap_heli = mcolors.LinearSegmentedColormap.from_list("heli", ['#FFFFFF', '#00FF
 cmap_lifted = mcolors.LinearSegmentedColormap.from_list("lifted", ['#FF00FF', '#FF0000', '#FFA500', '#FFFF00', '#00FF00', '#0000FF'], N=256)
 cmap_sun = mcolors.LinearSegmentedColormap.from_list("sun", ['#808080', '#FFD700', '#FFA500', '#FF8C00'], N=256)
 
-# --- SIGNIFIKANTES WETTER (DWD CODES) ---
 WW_LEGEND_DATA = {
     "Nebel": ("#FFFF00", list(range(40, 50))),
     "Regen leicht": ("#00FF00", [50, 51, 58, 60, 80]),
@@ -122,9 +104,8 @@ WW_LEGEND_DATA = {
 }
 cmap_ww = mcolors.ListedColormap(['#FFFFFF00'] + [c for l, (c, codes) in WW_LEGEND_DATA.items()])
 
-
 # ==============================================================================
-# 3. DAS EISERNE ROUTING-SYSTEM (VERHINDERT 404-FEHLER & DEADLINKS!)
+# 3. DAS EISERNE ROUTING-SYSTEM
 # ==============================================================================
 MODEL_ROUTER = {
     "ICON-D2": {
@@ -169,7 +150,6 @@ MODEL_ROUTER = {
 }
 
 def estimate_latest_run(model, now_utc):
-    """Präzise Schätzung des aktuellsten Modelllaufs inkl. Server-Delay (Rechenzeit der Supercomputer)"""
     if "D2" in model or "EU" in model:
         run_h = ((now_utc.hour - 3) // 3) * 3
         if run_h < 0: return (now_utc - timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0)
@@ -182,7 +162,6 @@ def estimate_latest_run(model, now_utc):
         run_h = ((now_utc.hour - 10) // 12) * 12
         if run_h < 0: return (now_utc - timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
         return now_utc.replace(hour=run_h, minute=0, second=0, microsecond=0)
-
 
 # ==============================================================================
 # 4. DYNAMISCHE SIDEBAR
@@ -222,13 +201,17 @@ with st.sidebar:
         sel_hour_str = st.radio("Zeit", hour_labels, label_visibility="collapsed")
         sel_hour = int(sel_hour_str.split("h")[0].replace("+", ""))
     
+    st.markdown("---")
     show_isobars = st.checkbox("Isobaren (Luftdruck) einblenden", value=True)
+    
+    # NEU: Der Gewitter-Schalter!
+    show_storms = st.checkbox("⚡ Gewitter-Risiko rot schraffieren", value=True, help="Zieht rote, diagonale Linien über Gebiete, in denen das Modell Gewitter berechnet.")
+    
     st.markdown("---")
     generate = st.button("🚀 Profi-Karte generieren", use_container_width=True)
     
     with st.expander("🛠️ Entwickler-Konsole"):
         debug_mode = st.checkbox("URL-Ping aktivieren (Zeigt Live-Serveranfragen)")
-
 
 # ==============================================================================
 # 5. DATA FETCH ENGINE
@@ -349,14 +332,20 @@ def fetch_meteo_data(model, param, hr, debug=False):
     return None, None, None, None, debug_logs
 
 # ==============================================================================
-# 6. KARTENGENERATOR & PLOTTING (DIE ABSOLUTE ENGINE)
+# 6. KARTENGENERATOR & PLOTTING
 # ==============================================================================
 if generate:
     cleanup_temp_files()
     
     with st.spinner(f"🛰️ Lade {sel_param} aus {sel_model}..."):
+        # Normalen Datensatz laden
         data, lons, lats, run_id, d_logs = fetch_meteo_data(sel_model, sel_param, sel_hour, debug_mode)
         iso_data, ilons, ilats, _, _ = fetch_meteo_data(sel_model, "Isobaren", sel_hour) if show_isobars else (None, None, None, None, None)
+        
+        # HEIMLICHER GEWITTER-DOWNLOAD (Nur wenn Schalter aktiv und Parameter verfügbar)
+        ww_data = None
+        if show_storms and sel_param != "Signifikantes Wetter" and "Signifikantes Wetter" in MODEL_ROUTER[sel_model]["params"]:
+            ww_data, wlons, wlats, _, _ = fetch_meteo_data(sel_model, "Signifikantes Wetter", sel_hour, False)
 
     if debug_mode and d_logs:
         st.write("📡 **Interne Server-Pings (Debug):**")
@@ -441,7 +430,6 @@ if generate:
             plt.colorbar(im, label="Sichtweite in m (Weiß=Nebel)", shrink=0.4)
             
         elif "Wolkenuntergrenze" in sel_param:
-            # Pcolormesh mit der scharfen Aviation-Farbskala, ABER ohne Linien-Tohuwabohu!
             im = ax.pcolormesh(lons, lats, data, cmap=cmap_base, norm=norm_base, shading='auto', zorder=5)
             plt.colorbar(im, label="Wolkenuntergrenze in m", shrink=0.4, ticks=base_levels)
             
@@ -472,6 +460,21 @@ if generate:
             ax.pcolormesh(lons, lats, grid, cmap=cmap_ww, shading='nearest', zorder=5)
             patches = [mpatches.Patch(color=c, label=l) for l, (c, _) in WW_LEGEND_DATA.items()]
             ax.legend(handles=patches, loc='lower left', title="Wetter-Klassifikation", fontsize='6', title_fontsize='7', framealpha=0.9).set_zorder(25)
+
+        # ----------------------------------------------------------------------
+        # NEU: DIE ROTE GEWITTER-SCHRAFFUR OVERLAY (//////)
+        # ----------------------------------------------------------------------
+        if show_storms and ww_data is not None:
+            # Maske bauen: Gewitter-Codes (95=leicht, 96/97/99=mäßig bis schwer)
+            storm_mask = np.isin(ww_data, [95, 96, 97, 99])
+            
+            if np.any(storm_mask):
+                plot_ww = np.zeros_like(ww_data)
+                plot_ww[storm_mask] = 1 
+                
+                # Macht die diagonalen Striche fett und rot sichtbar!
+                plt.rcParams['hatch.linewidth'] = 2.0 
+                ax.contourf(wlons, wlats, plot_ww, levels=[0.5, 1.5], colors='none', hatches=['////'], edgecolors='red', zorder=10)
 
         # ----------------------------------------------------------------------
         # ISOBAREN OVERLAY
