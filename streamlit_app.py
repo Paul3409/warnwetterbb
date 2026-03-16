@@ -32,7 +32,7 @@ LOCAL_TZ = ZoneInfo("Europe/Berlin")
 WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 # ==============================================================================
-# 2. MASTER-FARBSKALEN (DEINE EXAKTE HTML-PALETTE FÜR NIEDERSCHLAG)
+# 2. MASTER-FARBSKALEN (INKLUSIVE NEUER AVIATION-WOLKENSKALA)
 # ==============================================================================
 
 # --- TEMPERATUR (Glatter 10er Übergang) ---
@@ -44,7 +44,7 @@ temp_colors = [
 ]
 cmap_temp = mcolors.LinearSegmentedColormap.from_list("custom_temp", temp_colors)
 
-# --- NIEDERSCHLAG (DEINE EXAKTE HTML-FARBPALETTE - PERFEKTIONIERTER ÜBERGANG) ---
+# --- NIEDERSCHLAG (DEINE EXAKTE HTML-FARBPALETTE) ---
 precip_values = [0, 0.2, 0.5, 1.0, 1.5, 2.0, 3, 4, 5, 8, 12, 15, 20, 30, 40, 50]
 precip_colors = [
     '#FFFFFF', '#87CEEB', '#1E90FF', '#191970', '#006400', '#32CD32', '#FFFF00', 
@@ -56,6 +56,25 @@ precip_anchors = [v / vmax_precip for v in precip_values]
 cmap_precip = mcolors.LinearSegmentedColormap.from_list("custom_precip", list(zip(precip_anchors, precip_colors)))
 norm_precip = mcolors.Normalize(vmin=0, vmax=vmax_precip)
 
+# --- WOLKENUNTERGRENZE (AVIATION / FLUGSICHERHEITS-SKALA) ---
+# Hebt tiefe Wolken (Nebel/Hochnebel) extrem aggressiv hervor!
+base_levels = [0, 100, 200, 300, 400, 500, 750, 1000, 1500, 2000, 3000, 8000]
+base_colors = [
+    '#FF00FF', # 0-100m: Magenta (Bodenaufliegend)
+    '#FF0000', # 100-200m: Rot
+    '#FFA500', # 200-300m: Orange
+    '#FFFF00', # 300-400m: Gelb
+    '#ADFF2F', # 400-500m: Helles Grün
+    '#32CD32', # 500-750m: Grün
+    '#00BFFF', # 750-1000m: Hellblau
+    '#1E90FF', # 1000-1500m: Blau
+    '#0000FF', # 1500-2000m: Dunkelblau
+    '#A9A9A9', # 2000-3000m: Grau
+    '#FFFFFF'  # >3000m: Weiß (Unbedenklich)
+]
+cmap_base = mcolors.ListedColormap(base_colors)
+norm_base = mcolors.BoundaryNorm(base_levels, cmap_base.N)
+
 # --- CAPE (EXAKTE GRENZWERTE) ---
 cape_levels = [0, 25, 50, 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 10000]
 cape_colors = [
@@ -65,7 +84,7 @@ cape_colors = [
 cmap_cape = mcolors.ListedColormap(cape_colors)
 norm_cape = mcolors.BoundaryNorm(cape_levels, cmap_cape.N)
 
-# --- RADAR (ORIGINAL DWD FARBPROFIL - HARTE KANTEN) ---
+# --- RADAR (ORIGINAL DWD FARBPROFIL) ---
 radar_levels = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80]
 radar_colors = [
     '#FFFFFF', '#B0E0E6', '#00BFFF', '#0000FF', '#00FF00', '#32CD32', '#008000', 
@@ -80,7 +99,6 @@ cmap_clouds = mcolors.LinearSegmentedColormap.from_list("clouds", ['#1E90FF', '#
 cmap_relhum = mcolors.LinearSegmentedColormap.from_list("relhum", ['#8B4513', '#F4A460', '#FFFFE0', '#90EE90', '#008000', '#0000FF'], N=256)
 cmap_snow = mcolors.LinearSegmentedColormap.from_list("snow", ['#CCFFCC', '#FFFFFF', '#ADD8E6', '#0000FF', '#800080'], N=256)
 cmap_vis = mcolors.LinearSegmentedColormap.from_list("vis", ['#FFFFFF', '#D3D3D3', '#87CEEB', '#1E90FF'], N=256)
-cmap_base = mcolors.LinearSegmentedColormap.from_list("base", ['#808080', '#A9A9A9', '#ADD8E6', '#FFFFFF'], N=256)
 W_COLORS = ['#ADD8E6', '#0000FF', '#008000', '#FFFF00', '#FFD700', '#FFA500', '#FF0000', '#8B0000', '#800080', '#4B0082']
 cmap_wind = mcolors.LinearSegmentedColormap.from_list("wind", W_COLORS, N=256)
 cmap_heli = mcolors.LinearSegmentedColormap.from_list("heli", ['#FFFFFF', '#00FF00', '#FFFF00', '#FF0000', '#800080', '#000000'], N=256)
@@ -109,9 +127,6 @@ cmap_ww = mcolors.ListedColormap(['#FFFFFF00'] + [c for l, (c, codes) in WW_LEGE
 # ==============================================================================
 # 3. DAS EISERNE ROUTING-SYSTEM (VERHINDERT 404-FEHLER & DEADLINKS!)
 # ==============================================================================
-# ICON-D2-RUC wurde entfernt, da der DWD die Datenstruktur zerschossen hat.
-# Die Logik weiß jetzt exakt, was jedes Modell kann!
-
 MODEL_ROUTER = {
     "ICON-D2": {
         "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum"],
@@ -171,7 +186,7 @@ def estimate_latest_run(model, now_utc):
 
 
 # ==============================================================================
-# 4. DYNAMISCHE SIDEBAR (100% SICHERE AUSWAHL - KEINE GEISTERKLICKS)
+# 4. DYNAMISCHE SIDEBAR
 # ==============================================================================
 with st.sidebar:
     st.header("🛰️ Modell-Zentrale")
@@ -212,17 +227,15 @@ with st.sidebar:
     st.markdown("---")
     generate = st.button("🚀 Profi-Karte generieren", use_container_width=True)
     
-    # NEU: Entwickler-Konsole, damit wir sofort sehen, warum ein Server "Nein" sagt.
     with st.expander("🛠️ Entwickler-Konsole"):
         debug_mode = st.checkbox("URL-Ping aktivieren (Zeigt Live-Serveranfragen)")
 
 
 # ==============================================================================
-# 5. DATA FETCH ENGINE (DER BEREINIGTE KERNREAKTOR)
+# 5. DATA FETCH ENGINE
 # ==============================================================================
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_meteo_data(model, param, hr, debug=False):
-    # DYNAMISCHES MAPPING: Wolkenuntergrenze heißt bei D2 "ceiling", bei EU "hbas_con"!
     dyn_cloud_base = "ceiling" if "D2" in model else "hbas_con"
     
     p_map = {
@@ -240,7 +253,6 @@ def fetch_meteo_data(model, param, hr, debug=False):
     headers = {'User-Agent': 'Mozilla/5.0'}
     debug_logs = []
 
-    # --- A: DWD LOGIK (MIT 18-STUNDEN DEEP-SCAN FÜR VERZÖGERTE SERVER) ---
     if "ICON" in model:
         is_global = "Global" in model
         if is_global: m_dir, reg_str = "icon", "icon_global"
@@ -277,7 +289,6 @@ def fetch_meteo_data(model, param, hr, debug=False):
                     return data, lons, lats, dt_s, debug_logs
             except Exception: continue
 
-    # --- B: GFS LOGIK ---
     elif "GFS" in model:
         gfs_map = {
             "t_2m": "&var_TMP=on&lev_2_m_above_ground=on", "td_2m": "&var_DPT=on&lev_2_m_above_ground=on",
@@ -307,11 +318,9 @@ def fetch_meteo_data(model, param, hr, debug=False):
                     return data, lons, lats, f"{dt_s}{run:02d}", debug_logs
             except Exception: continue
 
-    # --- C: ECMWF & AIFS LOGIK (AUFLÖSUNGS-BUG BEHOBEN!) ---
     elif "ECMWF" in model:
         is_aifs = "AIFS" in model
         sys_type = "aifs" if is_aifs else "ifs"
-        # ECMWF Normal (IFS) liegt in 0p4-beta. AIFS (KI) liegt in 0p25-beta. Hier war der 404-Fehler versteckt!
         res_str = "0p25-beta" if is_aifs else "0p4-beta"
         
         for off in [0, 12, 24, 36]:
@@ -366,7 +375,6 @@ if generate:
         }
         ax.set_extent(extents[sel_region])
 
-        # Scharfe topografische Overlays
         ax.add_feature(cfeature.COASTLINE, linewidth=0.8, edgecolor='black', zorder=12)
         ax.add_feature(cfeature.BORDERS, linewidth=0.8, edgecolor='black', zorder=12)
         states = cfeature.NaturalEarthFeature(category='cultural', name='admin_1_states_provinces_lines', scale='10m', facecolor='none')
@@ -434,8 +442,15 @@ if generate:
             plt.colorbar(im, label="Sichtweite in m (Weiß=Nebel)", shrink=0.4)
             
         elif "Wolkenuntergrenze" in sel_param:
-            im = ax.pcolormesh(lons, lats, data, cmap=cmap_base, norm=mcolors.Normalize(vmin=0, vmax=3000), shading='auto', zorder=5)
-            plt.colorbar(im, label="Wolkenuntergrenze in m", shrink=0.4)
+            # Pcolormesh mit der scharfen Aviation-Farbskala
+            im = ax.pcolormesh(lons, lats, data, cmap=cmap_base, norm=norm_base, shading='auto', zorder=5)
+            
+            # Isolinien einzeichnen: 100, 200, 300, 400, 500, dann 750, 1000, 1250...
+            contour_levels = [100, 200, 300, 400, 500] + list(range(750, 3001, 250))
+            cs_base = ax.contour(lons, lats, data, colors='black', linewidths=0.5, levels=contour_levels, zorder=6)
+            ax.clabel(cs_base, inline=True, fontsize=6, fmt='%1.0f')
+            
+            plt.colorbar(im, label="Wolkenuntergrenze in m", shrink=0.4, ticks=base_levels)
             
         elif "Wolkenobergrenze" in sel_param:
             im = ax.pcolormesh(lons, lats, data, cmap='Blues', norm=mcolors.Normalize(vmin=0, vmax=13000), shading='auto', zorder=5)
