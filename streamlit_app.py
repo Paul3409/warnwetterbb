@@ -10,6 +10,7 @@ import matplotlib.patches as mpatches
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import numpy as np
 
 # ==============================================================================
@@ -25,6 +26,10 @@ def cleanup_temp_files():
                 os.remove(file)
             except Exception:
                 pass
+
+# Lokale Zeitzone für Deutschland (MEZ/MESZ automatisch)
+LOCAL_TZ = ZoneInfo("Europe/Berlin")
+WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 # ==============================================================================
 # 2. METEOROLOGISCHE FARBSKALEN (HOCHPRÄZISE & ORIGINAL DWD)
@@ -80,8 +85,6 @@ cmap_vis = mcolors.LinearSegmentedColormap.from_list("vis", ['#FFFFFF', '#D3D3D3
 cmap_base = mcolors.LinearSegmentedColormap.from_list("base", ['#808080', '#A9A9A9', '#ADD8E6', '#FFFFFF'], N=256)
 W_COLORS = ['#ADD8E6', '#0000FF', '#008000', '#FFFF00', '#FFD700', '#FFA500', '#FF0000', '#8B0000', '#800080', '#4B0082']
 cmap_wind = mcolors.LinearSegmentedColormap.from_list("wind", W_COLORS, N=256)
-
-# Spezielle Skalen für die neuen Parameter
 cmap_heli = mcolors.LinearSegmentedColormap.from_list("heli", ['#FFFFFF', '#00FF00', '#FFFF00', '#FF0000', '#800080', '#000000'], N=256)
 cmap_lifted = mcolors.LinearSegmentedColormap.from_list("lifted", ['#FF00FF', '#FF0000', '#FFA500', '#FFFF00', '#00FF00', '#0000FF'], N=256)
 cmap_sun = mcolors.LinearSegmentedColormap.from_list("sun", ['#808080', '#FFD700', '#FFA500', '#FF8C00'], N=256)
@@ -106,72 +109,124 @@ cmap_ww = mcolors.ListedColormap(['#FFFFFF00'] + [c for l, (c, codes) in WW_LEGE
 
 
 # ==============================================================================
-# 3. DYNAMISCHE SIDEBAR (MOBILE-OPTIMIERT: KEINE TASTATUR!)
+# 3. HELPER: VERFÜGBARKEITS-LOGIK FÜR MODELLE
+# ==============================================================================
+ALL_REGIONS = ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"]
+
+ALL_PARAMS = [
+    "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
+    "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "CAPE (J/kg)", 
+    "CIN (J/kg)", "Gesamtbedeckung (%)", "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)",
+    "Signifikantes Wetter", "Sichtweite (m)", "Wolkenuntergrenze (m)", "Wolkenobergrenze (m)", 
+    "Spezifische Feuchte (g/kg)", "Simuliertes Radar (dBZ)", "Helizität / SRH (m²/s²)", 
+    "Sonnenscheindauer (Min)", "0-Grad-Grenze (m)", "Lifted Index (K)"
+]
+
+def get_valid_regions(model):
+    if model in ["ICON-D2", "ICON-D2-RUC"]:
+        return ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum"]
+    return ALL_REGIONS
+
+def get_valid_params(model):
+    base = [
+        "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
+        "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "CAPE (J/kg)", 
+        "CIN (J/kg)", "Gesamtbedeckung (%)", "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)"
+    ]
+    if "ICON" in model:
+        base.extend(["Signifikantes Wetter", "Sichtweite (m)", "Wolkenuntergrenze (m)", "Wolkenobergrenze (m)", "Spezifische Feuchte (g/kg)"])
+    if "ICON-D2" in model:
+        base.extend(["Simuliertes Radar (dBZ)", "Helizität / SRH (m²/s²)", "Sonnenscheindauer (Min)"])
+    if "GFS" in model or "ECMWF" in model:
+        base.extend(["0-Grad-Grenze (m)", "Lifted Index (K)"])
+    return base
+
+def estimate_latest_run(model, now_utc):
+    """Schätzt den aktuellsten fertigen Modelllauf ab (inkl. Rechenverzögerung des Servers)."""
+    if "RUC" in model:
+        return now_utc.replace(minute=0, second=0, microsecond=0) - timedelta(hours=2)
+    elif "D2" in model or "EU" in model:
+        run_h = ((now_utc.hour - 3) // 3) * 3
+        if run_h < 0: return (now_utc - timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0)
+        return now_utc.replace(hour=run_h, minute=0, second=0, microsecond=0)
+    elif "GFS" in model or "Global" in model:
+        run_h = ((now_utc.hour - 6) // 6) * 6
+        if run_h < 0: return (now_utc - timedelta(days=1)).replace(hour=18, minute=0, second=0, microsecond=0)
+        return now_utc.replace(hour=run_h, minute=0, second=0, microsecond=0)
+    elif "ECMWF" in model:
+        run_h = ((now_utc.hour - 10) // 12) * 12
+        if run_h < 0: return (now_utc - timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
+        return now_utc.replace(hour=run_h, minute=0, second=0, microsecond=0)
+
+
+# ==============================================================================
+# 4. DYNAMISCHE SIDEBAR (AUSGEGRAUT, NICHT ENTFERNT!)
 # ==============================================================================
 with st.sidebar:
     st.header("🛰️ Modell-Zentrale")
     
-    # 1. Modellauswahl (Mit dem neuen ECMWF-AIFS KI-Modell!)
     with st.expander("🌍 1. Modell wählen", expanded=True):
         model_list = ["ICON-D2", "ICON-D2-RUC", "ICON-EU", "ICON (Global)", "GFS (NOAA)", "ECMWF", "ECMWF-AIFS (KI-Modell)"]
         sel_model = st.radio("Wettermodell", model_list, label_visibility="collapsed")
     
-    # 2. Regionen (Dynamischer Schutz vor leeren Karten)
     with st.expander("🗺️ 2. Karten-Ausschnitt", expanded=False):
-        reg_opts = ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum"]
-        if sel_model not in ["ICON-D2", "ICON-D2-RUC"]: 
-            reg_opts.append("Europa")
-        sel_region = st.radio("Region", reg_opts, label_visibility="collapsed")
+        valid_regions = get_valid_regions(sel_model)
+        # Nicht unterstützte Regionen werden mit einem "Verboten"-Schild versehen (Ausgegraut)
+        formatted_regions = [r if r in valid_regions else f"{r}  🚫 (ausgegraut)" for r in ALL_REGIONS]
+        sel_region_raw = st.radio("Region", formatted_regions, label_visibility="collapsed")
     
-    # 3. Parameter-Baum (Passt sich extrem präzise dem gewählten Modell an!)
     with st.expander("🌪️ 3. Parameter wählen", expanded=True):
-        p_opts = [
-            "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", 
-            "Bodendruck (hPa)", "500 hPa Geopot. Höhe", "850 hPa Temp.", 
-            "Niederschlag (mm)"
-        ]
-        
-        # Konvektions-Parameter (Fast überall verfügbar)
-        if "ICON" in sel_model or "GFS" in sel_model or "ECMWF" in sel_model:
-            p_opts.extend(["CAPE (J/kg)", "CIN (J/kg)", "Gesamtbedeckung (%)", "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)"])
-            
-        # DWD Exklusiv (Die ganz tiefen Detail-Parameter)
-        if "ICON" in sel_model:
-            p_opts.extend(["Signifikantes Wetter", "Sichtweite (m)", "Wolkenuntergrenze (m)", "Wolkenobergrenze (m)", "Spezifische Feuchte (g/kg)"])
-        
-        # ICON-D2 Exklusiv (High-Res)
-        if "ICON-D2" in sel_model:
-            p_opts.extend(["Simuliertes Radar (dBZ)", "Helizität / SRH (m²/s²)", "Sonnenscheindauer (Min)"])
-            
-        # GFS & ECMWF Exklusiv
-        if "GFS" in sel_model or "ECMWF" in sel_model:
-            p_opts.extend(["0-Grad-Grenze (m)", "Lifted Index (K)"])
-            
-        sel_param = st.radio("Parameter", p_opts, label_visibility="collapsed")
+        valid_params = get_valid_params(sel_model)
+        # Nicht unterstützte Parameter werden "ausgegraut" markiert
+        formatted_params = [p if p in valid_params else f"{p}  🚫 (ausgegraut)" for p in ALL_PARAMS]
+        sel_param_raw = st.radio("Parameter", formatted_params, label_visibility="collapsed")
     
-    # 4. Vorhersage-Stunde (Scrollbare Liste ohne Tastatur-Popup)
-    with st.expander("⏱️ 4. Vorhersage-Stunde", expanded=True):
+    with st.expander("⏱️ 4. Vorhersage-Stunde (MEZ/MESZ)", expanded=True):
         if "RUC" in sel_model: hours = list(range(1, 28))
         elif "EU" in sel_model: hours = list(range(1, 79))
-        elif "GFS" in sel_model: hours = list(range(3, 123, 3))
+        elif "GFS" in sel_model or "Global" in sel_model: hours = list(range(3, 123, 3))
         elif "ECMWF" in sel_model: hours = list(range(3, 147, 3))
-        elif "Global" in sel_model: hours = list(range(3, 123, 3))
         else: hours = list(range(1, 49))
+        
+        # Absolute Zeitberechnung für das Dropdown
+        now_utc = datetime.now(timezone.utc)
+        base_run = estimate_latest_run(sel_model, now_utc)
+        
+        hour_labels = []
+        for h in hours:
+            target_dt_utc = base_run + timedelta(hours=h)
+            target_dt_loc = target_dt_utc.astimezone(LOCAL_TZ)
+            tz_str = "MESZ" if target_dt_loc.dst() else "MEZ"
+            wt = WOCHENTAGE[target_dt_loc.weekday()]
+            time_str = f"+{h}h  ({wt}, {target_dt_loc.strftime('%d.%m. %H:%00')} {tz_str})"
+            hour_labels.append(time_str)
             
-        sel_hour_str = st.radio("Zeit", [f"+{h}h" for h in hours], label_visibility="collapsed")
-        sel_hour = int(sel_hour_str.replace("+", "").replace("h", ""))
+        sel_hour_str = st.radio("Zeit", hour_labels, label_visibility="collapsed")
+        sel_hour = int(sel_hour_str.split("h")[0].replace("+", ""))
     
     show_isobars = st.checkbox("Isobaren (Luftdruck) einblenden", value=True)
     st.markdown("---")
     generate = st.button("🚀 Profi-Karte generieren", use_container_width=True)
 
+# BLOCKER: Falls ein ausgegrautes Element gewählt wurde, Lauf abbrechen!
+if generate:
+    if "🚫" in sel_region_raw:
+        st.warning(f"Die Region '{sel_region_raw.replace('  🚫 (ausgegraut)', '')}' wird vom {sel_model} nicht abgedeckt. Bitte wechsle die Region oder das Modell.")
+        st.stop()
+    if "🚫" in sel_param_raw:
+        st.warning(f"Der Parameter '{sel_param_raw.replace('  🚫 (ausgegraut)', '')}' wird vom {sel_model} nicht berechnet. Bitte wähle einen anderen Parameter.")
+        st.stop()
+
+# Wir bereinigen die Strings für die Fetch-Engine
+sel_region = sel_region_raw.replace("  🚫 (ausgegraut)", "")
+sel_param = sel_param_raw.replace("  🚫 (ausgegraut)", "")
+
 
 # ==============================================================================
-# 4. DATA FETCH ENGINE (ABSOLUT FEHLERTOLERANT & UMFASSEND)
+# 5. DATA FETCH ENGINE (ABSOLUT FEHLERTOLERANT & UMFASSEND)
 # ==============================================================================
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_meteo_data(model, param, hr):
-    # Mapping auf die GRIB ShortNames der Server
     p_map = {
         "Temperatur 2m (°C)": "t_2m", "Taupunkt 2m (°C)": "td_2m", "Windböen (km/h)": "vmax_10m", 
         "Bodendruck (hPa)": "sp", "500 hPa Geopot. Höhe": "fi", "850 hPa Temp.": "t", 
@@ -205,7 +260,6 @@ def fetch_meteo_data(model, param, hr):
             
             dt_s = t.replace(hour=run, minute=0, second=0, microsecond=0).strftime("%Y%m%d%H")
             
-            # Bestimmung der Druckfläche für das GRIB-File
             l_type = "pressure-level" if key in ["fi", "t", "relhum", "qv"] else "single-level"
             if l_type == "pressure-level": 
                 lvl_str = f"{'500' if '500' in param else '700' if '700' in param else '850'}_"
@@ -264,7 +318,6 @@ def fetch_meteo_data(model, param, hr):
 
     # --- C: ECMWF & AIFS LOGIK ---
     elif "ECMWF" in model:
-        # Check ob das normale ECMWF oder das neue KI-Modell (AIFS) gewählt wurde
         sys_type = "aifs" if "AIFS" in model else "ifs"
         
         for off in [0, 12, 24, 36]:
@@ -296,7 +349,7 @@ def fetch_meteo_data(model, param, hr):
     return None, None, None, None
 
 # ==============================================================================
-# 5. KARTENGENERATOR & PLOTTING (DIE ENGINE)
+# 6. KARTENGENERATOR & PLOTTING (DIE ENGINE)
 # ==============================================================================
 if generate:
     cleanup_temp_files()
@@ -323,9 +376,8 @@ if generate:
         ax.add_feature(states, linewidth=0.5, edgecolor='black', zorder=12)
 
         # ----------------------------------------------------------------------
-        # PLOTTING-LOGIK FÜR 22 PARAMETER
+        # PLOTTING-LOGIK
         # ----------------------------------------------------------------------
-        
         if "Temperatur" in sel_param or "850 hPa Temp." in sel_param or "Taupunkt" in sel_param:
             val_c = data - 273.15 if data.max() > 100 else data
             label_txt = "Taupunkt in °C" if "Taupunkt" in sel_param else "Temperatur in °C"
@@ -341,7 +393,6 @@ if generate:
             plt.colorbar(im, label="CIN (Hemmung/Deckel) in J/kg", shrink=0.4)
             
         elif "Radar" in sel_param: 
-            # DWD Radar-Skala mit exakten, harten Kanten!
             im = ax.pcolormesh(lons, lats, data, cmap=cmap_radar, norm=norm_radar, shading='auto', zorder=5)
             plt.colorbar(im, label="Radar-Reflektivität in dBZ", shrink=0.4, ticks=[0, 15, 30, 45, 60, 75])
             
@@ -390,7 +441,7 @@ if generate:
             
         elif "Wolkenobergrenze" in sel_param:
             im = ax.pcolormesh(lons, lats, data, cmap='Blues', norm=mcolors.Normalize(vmin=0, vmax=13000), shading='auto', zorder=5)
-            plt.colorbar(im, label="Wolkenobergrenze in m (Je höher, desto stärker das Gewitter)", shrink=0.4)
+            plt.colorbar(im, label="Wolkenobergrenze in m (Höhere Wolken = stärkere Gewitter)", shrink=0.4)
             
         elif "Spezifische Feuchte" in sel_param:
             im = ax.pcolormesh(lons, lats, data * 1000, cmap='YlGnBu', norm=mcolors.Normalize(vmin=0, vmax=20), shading='auto', zorder=5)
@@ -405,7 +456,6 @@ if generate:
             plt.colorbar(im, label="Sonnenscheindauer (Minuten/Stunde)", shrink=0.4)
             
         elif "Lifted Index" in sel_param:
-            # Lifted Index: Negativ = Gewitter!
             im = ax.pcolormesh(lons, lats, data, cmap=cmap_lifted, norm=mcolors.Normalize(vmin=-10, vmax=10), shading='auto', zorder=5)
             plt.colorbar(im, label="Lifted Index in K (Blau=Stabil, Rot/Magenta=Gewitter)", shrink=0.4)
             
@@ -427,10 +477,13 @@ if generate:
             ax.clabel(cs, inline=True, fontsize=8, fmt='%1.0f')
 
         # ----------------------------------------------------------------------
-        # HEADER INFO
+        # HEADER INFO (Mit exakter lokaler Zeit: MEZ/MESZ)
         # ----------------------------------------------------------------------
-        v_dt = datetime.strptime(run_id, "%Y%m%d%H").replace(tzinfo=timezone.utc) + timedelta(hours=sel_hour)
-        info_txt = f"Modell: {sel_model}\nParameter: {sel_param}\nTermin: {v_dt.strftime('%d.%m.%Y %H:00')} UTC\nModell-Lauf: {run_id[-2:]}Z"
+        v_dt_utc = datetime.strptime(run_id, "%Y%m%d%H").replace(tzinfo=timezone.utc) + timedelta(hours=sel_hour)
+        v_dt_loc = v_dt_utc.astimezone(LOCAL_TZ)
+        tz_str = "MESZ" if v_dt_loc.dst() else "MEZ"
+        
+        info_txt = f"Modell: {sel_model}\nParameter: {sel_param}\nTermin: {v_dt_loc.strftime('%d.%m.%Y %H:%00')} {tz_str}\nModell-Lauf: {run_id[-2:]}Z"
         ax.text(0.02, 0.98, info_txt, transform=ax.transAxes, fontsize=7, fontweight='bold', va='top', bbox=dict(facecolor='white', alpha=0.8, boxstyle='round,pad=0.3', edgecolor='gray'), zorder=30)
 
         st.pyplot(fig)
@@ -438,5 +491,3 @@ if generate:
         
     else:
         st.error(f"⚠️ Schwerer Datenfehler: {sel_model} liefert für '{sel_param}' (+{sel_hour}h) aktuell keine Daten aus. Versuch eine andere Uhrzeit.")
-else:
-    st.info("ℹ️ Keine Tastatur mehr! Wähle links ganz entspannt deine Parameter und klicke auf Karte generieren.")
