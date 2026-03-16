@@ -27,28 +27,15 @@ def cleanup_temp_files():
                 pass
 
 # ==============================================================================
-# 2. FARBSKALEN DEFINITIONEN (HOCHPRÄZISE)
+# 2. FARBSKALEN DEFINITIONEN (HOCHPRÄZISE & FLÜSSIG)
 # ==============================================================================
 
 # --- TEMPERATUR & TAUPUNKT (Die schlagartigen 10er-Sprünge) ---
 temp_colors = [
-    (0.0, '#D3D3D3'),       # -30: hellgrau
-    (5/60, '#FFFFFF'),      # -25: weiß
-    (10/60, '#FFC0CB'),     # -20: rosa
-    (15/60, '#FF00FF'),     # -15: magenta
-    (20/60, '#800080'),     # -10: lila
-    (20.01/60, '#00008B'),  # SCHLAGARTIG zu dunkelblau
-    (25/60, '#0000CD'),     # -5: dunkles blau
-    (29.99/60, '#ADD8E6'),  # kurz vor 0: hellblau
-    (30/60, '#006400'),     # +0: SCHLAGARTIG zu dunkelgrün
-    (35/60, '#008000'),     # +5: grün
-    (39/60, '#90EE90'),     # +9: hellgrün
-    (39.99/60, '#90EE90'),  # kurz vor 10: hellgrün
-    (40/60, '#FFFF00'),     # +10: SCHLAGARTIG zu gelb
-    (45/60, '#FFA500'),     # +15: orange
-    (50/60, '#FF0000'),     # +20: rot
-    (55/60, '#8B0000'),     # +25: dunkelrot
-    (60/60, '#800080')      # +30: lila
+    (0.0, '#D3D3D3'), (5/60, '#FFFFFF'), (10/60, '#FFC0CB'), (15/60, '#FF00FF'),
+    (20/60, '#800080'), (20.01/60, '#00008B'), (25/60, '#0000CD'), (29.99/60, '#ADD8E6'),
+    (30/60, '#006400'), (35/60, '#008000'), (39/60, '#90EE90'), (39.99/60, '#90EE90'),
+    (40/60, '#FFFF00'), (45/60, '#FFA500'), (50/60, '#FF0000'), (55/60, '#8B0000'), (60/60, '#800080')
 ]
 cmap_temp = mcolors.LinearSegmentedColormap.from_list("custom_temp", temp_colors)
 
@@ -73,27 +60,22 @@ cmap_ww = mcolors.ListedColormap(['#FFFFFF00'] + [c for l, (c, codes) in WW_LEGE
 # --- CAPE (EXAKTE GRENZWERTE) ---
 cape_levels = [0, 25, 50, 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 10000]
 cape_colors = [
-    '#006400', # 0-25: dunkles grün
-    '#2E8B57', # 25-50: SeaGreen (Heller als dunkelgrün, kein hellgrün!)
-    '#ADFF2F', # 50-100: gelbgrün
-    '#FFFF00', # 100-250: gelb
-    '#FFB347', # 250-500: hellorange
-    '#FFA500', # 500-750: orange
-    '#FF4500', # 750-1000: rotorange
-    '#FF0000', # 1000-1500: rot
-    '#8B0000', # 1500-2000: dunkelrot
-    '#800080', # 2000-2500: lila
-    '#FF00FF', # 2500-3000: magenta
-    '#FFFFFF', # 3000-4000: weiß
-    '#808080', # 4000-5000: grau
-    '#404040'  # 5000+: dunkelgrau
+    '#006400', '#2E8B57', '#ADFF2F', '#FFFF00', '#FFB347', '#FFA500', 
+    '#FF4500', '#FF0000', '#8B0000', '#800080', '#FF00FF', '#FFFFFF', '#808080', '#404040'
 ]
 cmap_cape = mcolors.ListedColormap(cape_colors)
 norm_cape = mcolors.BoundaryNorm(cape_levels, cmap_cape.N)
 
-# --- WEITERE SKALEN ---
+# --- RADAR (DEINE NEUE FLÜSSIGE SKALA: 0 bis 80 dBZ) ---
+radar_colors = ['#FFFFFF', '#00008B', '#006400', '#FFFF00', '#FFA500', '#FF0000', '#8B0000', '#800080', '#FF00FF']
+cmap_radar = mcolors.LinearSegmentedColormap.from_list("radar", radar_colors, N=256)
+
+# --- NEUE SKALEN ---
+cmap_clouds = mcolors.LinearSegmentedColormap.from_list("clouds", ['#1E90FF', '#87CEEB', '#D3D3D3', '#FFFFFF'], N=256)
+cmap_relhum = mcolors.LinearSegmentedColormap.from_list("relhum", ['#8B4513', '#F4A460', '#FFFFE0', '#90EE90', '#008000', '#0000FF'], N=256)
+cmap_snow = mcolors.LinearSegmentedColormap.from_list("snow", ['#CCFFCC', '#FFFFFF', '#ADD8E6', '#0000FF', '#800080'], N=256)
+
 cmap_cin = mcolors.LinearSegmentedColormap.from_list("cin", ['#FFFFFF', '#ADD8E6', '#0000FF', '#00008B', '#000000'], N=256)
-cmap_radar = mcolors.LinearSegmentedColormap.from_list("radar", ['#FFFFFF', '#00FFFF', '#0000FF', '#00FF00', '#FFFF00', '#FFA500', '#FF0000', '#FF00FF', '#E6E6FA'], N=256)
 cmap_precip = mcolors.LinearSegmentedColormap.from_list("precip", ['#FFFFFF', '#ADD8E6', '#0000FF', '#800080', '#8B0000'], N=256)
 W_COLORS = ['#ADD8E6', '#0000FF', '#008000', '#FFFF00', '#FFD700', '#FFA500', '#FF0000', '#8B0000', '#800080', '#4B0082']
 cmap_wind = mcolors.LinearSegmentedColormap.from_list("wind", W_COLORS, N=256)
@@ -105,18 +87,21 @@ cmap_wind = mcolors.LinearSegmentedColormap.from_list("wind", W_COLORS, N=256)
 with st.sidebar:
     st.header("🛰️ Modell-Zentrale")
     
-    # 1. Modellauswahl
     sel_model = st.selectbox("Wettermodell", ["ICON-D2", "ICON-D2-RUC", "ICON-EU", "GFS (NOAA)", "ECMWF"])
     
-    # 2. Dynamische Regionen (Schützt vor leeren Karten)
     if sel_model in ["ICON-D2", "ICON-D2-RUC"]:
         region_opts = ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum"]
     else:
         region_opts = ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum", "Europa"]
     sel_region = st.selectbox("Karten-Ausschnitt", region_opts)
     
-    # 3. Dynamische Parameter
-    p_opts = ["Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "CAPE (J/kg)", "CIN (J/kg)"]
+    # Der gigantische Parameter-Baum
+    p_opts = [
+        "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", 
+        "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", 
+        "CAPE (J/kg)", "CIN (J/kg)", "Gesamtbedeckung (%)", 
+        "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)"
+    ]
     if "ICON" in sel_model:
         p_opts.append("Signifikantes Wetter")
     if "ICON-D2" in sel_model:
@@ -126,26 +111,23 @@ with st.sidebar:
         
     sel_param = st.selectbox("Meteorologischer Parameter", p_opts)
     
-    # 4. Dynamische Zeitauswahl (Dropdown statt Slider!)
+    # Dropdown-Logik für die Vorhersagezeit
     if "RUC" in sel_model:
         hours = list(range(1, 28))
     elif "EU" in sel_model:
-        hours = list(range(1, 79)) # ICON-EU stündlich bis Tag 3
+        hours = list(range(1, 79))
     elif "GFS" in sel_model:
-        hours = list(range(3, 123, 3)) # GFS 3-stündlich
+        hours = list(range(3, 123, 3))
     elif "ECMWF" in sel_model:
-        hours = list(range(3, 147, 3)) # ECMWF 3-stündlich
-    else: # ICON-D2
+        hours = list(range(3, 147, 3))
+    else:
         hours = list(range(1, 49))
         
-    # Die Zeiten als Dropdown-Liste formatieren
     hour_labels = [f"+{h}h" for h in hours]
     sel_hour_str = st.selectbox("Vorhersagezeit", hour_labels)
     sel_hour = int(sel_hour_str.replace("+", "").replace("h", ""))
     
-    # 5. Overlays
     show_isobars = st.checkbox("Isobaren (Bodendruck) einblenden", value=True)
-    
     st.markdown("---")
     generate = st.button("🚀 Profi-Karte generieren", use_container_width=True)
 
@@ -155,21 +137,15 @@ with st.sidebar:
 # ==============================================================================
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_meteo_data(model, param, hr):
-    # Mapping auf die echten GRIB ShortNames
     p_map = {
-        "Temperatur 2m (°C)": "t_2m",
-        "Taupunkt 2m (°C)": "td_2m",
-        "Windböen (km/h)": "vmax_10m", 
-        "500 hPa Geopot. Höhe": "fi",
-        "850 hPa Temp.": "t", 
-        "Signifikantes Wetter": "ww",
-        "Isobaren": "pmsl",
-        "CAPE (J/kg)": "cape_ml",
-        "CIN (J/kg)": "cin_ml",
-        "Niederschlag (mm)": "tot_prec",
-        "Simuliertes Radar (dBZ)": "dbz_cmax",
-        "0-Grad-Grenze (m)": "hgt_0c"
+        "Temperatur 2m (°C)": "t_2m", "Taupunkt 2m (°C)": "td_2m", "Windböen (km/h)": "vmax_10m", 
+        "500 hPa Geopot. Höhe": "fi", "850 hPa Temp.": "t", "Signifikantes Wetter": "ww",
+        "Isobaren": "pmsl", "CAPE (J/kg)": "cape_ml", "CIN (J/kg)": "cin_ml",
+        "Niederschlag (mm)": "tot_prec", "Simuliertes Radar (dBZ)": "dbz_cmax",
+        "0-Grad-Grenze (m)": "hgt_0c", "Gesamtbedeckung (%)": "clct", 
+        "Rel. Feuchte 700 hPa (%)": "relhum", "Schneehöhe (cm)": "h_snow"
     }
+    
     key = p_map[param]
     now = datetime.now(timezone.utc)
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -185,8 +161,12 @@ def fetch_meteo_data(model, param, hr):
             run = t.hour if is_ruc else (t.hour // 3) * 3
             dt_s = t.replace(hour=run, minute=0, second=0, microsecond=0).strftime("%Y%m%d%H")
             
-            l_type = "pressure-level" if key in ["fi", "t"] else "single-level"
-            lvl_str = f"{'500' if '500' in param else '850'}_" if l_type == "pressure-level" else "2d_"
+            l_type = "pressure-level" if key in ["fi", "t", "relhum"] else "single-level"
+            
+            if l_type == "pressure-level":
+                lvl_str = f"{'500' if '500' in param else '700' if '700' in param else '850'}_"
+            else:
+                lvl_str = "2d_"
             
             url = f"https://opendata.dwd.de/weather/nwp/{m_dir}/grib/{run:02d}/{key}/{m_dir}_{reg_str}_regular-lat-lon_{l_type}_{dt_s}_{hr:03d}_{lvl_str}{key}.grib2.bz2"
             
@@ -201,7 +181,7 @@ def fetch_meteo_data(model, param, hr):
                     ds_var = ds[list(ds.data_vars)[0]]
                     
                     if 'isobaricInhPa' in ds_var.dims:
-                        target_p = 500 if "500" in param else 850
+                        target_p = 500 if "500" in param else 700 if "700" in param else 850
                         ds_var = ds_var.sel(isobaricInhPa=target_p)
                         
                     data = ds_var.isel(step=0, height=0, missing_dims='ignore').values.squeeze()
@@ -211,18 +191,19 @@ def fetch_meteo_data(model, param, hr):
             except Exception:
                 continue
 
-    # --- B: GFS LOGIK (NOAA NOMADS Server) ---
+    # --- B: GFS LOGIK (NOAA NOMADS) ---
     elif "GFS" in model:
-        if key == "t_2m": gfs_p = "&var_TMP=on&lev_2_m_above_ground=on"
-        elif key == "td_2m": gfs_p = "&var_DPT=on&lev_2_m_above_ground=on"
-        elif key == "vmax_10m": gfs_p = "&var_GUST=on&lev_surface=on"
-        elif key == "fi": gfs_p = "&var_HGT=on&lev_500_mb=on"
-        elif key == "t": gfs_p = "&var_TMP=on&lev_850_mb=on"
-        elif key == "pmsl": gfs_p = "&var_PRMSL=on&lev_mean_sea_level=on"
-        elif key == "cape_ml": gfs_p = "&var_CAPE=on&lev_surface=on"
-        elif key == "cin_ml": gfs_p = "&var_CIN=on&lev_surface=on"
-        elif key == "tot_prec": gfs_p = "&var_APCP=on&lev_surface=on"
-        elif key == "hgt_0c": gfs_p = "&var_HGT=on&lev_0C_isotherm=on"
+        # GFS Filter Mapping
+        gfs_map = {
+            "t_2m": "&var_TMP=on&lev_2_m_above_ground=on", "td_2m": "&var_DPT=on&lev_2_m_above_ground=on",
+            "vmax_10m": "&var_GUST=on&lev_surface=on", "fi": "&var_HGT=on&lev_500_mb=on",
+            "t": "&var_TMP=on&lev_850_mb=on", "pmsl": "&var_PRMSL=on&lev_mean_sea_level=on",
+            "cape_ml": "&var_CAPE=on&lev_surface=on", "cin_ml": "&var_CIN=on&lev_surface=on",
+            "tot_prec": "&var_APCP=on&lev_surface=on", "hgt_0c": "&var_HGT=on&lev_0C_isotherm=on",
+            "clct": "&var_TCDC=on&lev_entire_atmosphere=on", "relhum": "&var_RH=on&lev_700_mb=on",
+            "h_snow": "&var_SNOD=on&lev_surface=on"
+        }
+        gfs_p = gfs_map.get(key, "")
         
         for off in [3, 6, 9, 12, 18]:
             t = now - timedelta(hours=off)
@@ -241,7 +222,7 @@ def fetch_meteo_data(model, param, hr):
             except Exception:
                 continue
 
-    # --- C: ECMWF LOGIK (IFS Open Data) ---
+    # --- C: ECMWF LOGIK (IFS) ---
     elif "ECMWF" in model:
         for off in [0, 12, 24, 36]:
             t = now - timedelta(hours=off)
@@ -254,12 +235,18 @@ def fetch_meteo_data(model, param, hr):
                     with open("temp_ecmwf.grib", "wb") as f: 
                         f.write(r.content)
                     
-                    e_k = {"t_2m": "2t", "td_2m": "2d", "vmax_10m": "10fg", "fi": "z", "t": "t", "pmsl": "msl", "cape_ml": "cape", "cin_ml": "cin", "tot_prec": "tp"}.get(key, "2t")
+                    e_k = {
+                        "t_2m": "2t", "td_2m": "2d", "vmax_10m": "10fg", "fi": "z", "t": "t", 
+                        "pmsl": "msl", "cape_ml": "cape", "cin_ml": "cin", "tot_prec": "tp",
+                        "clct": "tcc", "relhum": "r", "h_snow": "sd"
+                    }.get(key, "2t")
+                    
                     ds = xr.open_dataset("temp_ecmwf.grib", engine='cfgrib', filter_by_keys={'shortName': e_k})
                     ds_var = ds[list(ds.data_vars)[0]]
                     
                     if 'isobaricInhPa' in ds_var.dims:
-                        ds_var = ds_var.sel(isobaricInhPa=500 if "500" in param else 850)
+                        target_p = 500 if "500" in param else 700 if "700" in param else 850
+                        ds_var = ds_var.sel(isobaricInhPa=target_p)
                         
                     data = ds_var.isel(step=0, height=0, missing_dims='ignore').values.squeeze()
                     lons, lats = np.meshgrid(ds.longitude.values, ds.latitude.values)
@@ -275,7 +262,7 @@ def fetch_meteo_data(model, param, hr):
 # ==============================================================================
 if generate:
     cleanup_temp_files()
-    with st.spinner(f"🛰️ Lade {sel_model} Daten für {sel_param}..."):
+    with st.spinner(f"🛰️ Kontaktiere Rechenzentrum... Lade Daten für {sel_param}"):
         data, lons, lats, run_id = fetch_meteo_data(sel_model, sel_param, sel_hour)
         iso_data, ilons, ilats, _ = fetch_meteo_data(sel_model, "Isobaren", sel_hour) if show_isobars else (None, None, None, None)
 
@@ -315,12 +302,26 @@ if generate:
             plt.colorbar(im, label="CIN (Hemmung/Deckel) in J/kg", shrink=0.4)
             
         elif "Radar" in sel_param:
-            im = ax.pcolormesh(lons, lats, data, cmap=cmap_radar, norm=mcolors.Normalize(vmin=0, vmax=65), shading='auto', zorder=5)
+            im = ax.pcolormesh(lons, lats, data, cmap=cmap_radar, norm=mcolors.Normalize(vmin=0, vmax=80), shading='auto', zorder=5)
             plt.colorbar(im, label="Radar-Reflektivität in dBZ", shrink=0.4)
             
         elif "Niederschlag" in sel_param:
             im = ax.pcolormesh(lons, lats, data, cmap=cmap_precip, norm=mcolors.Normalize(vmin=0.1, vmax=50), shading='auto', zorder=5)
             plt.colorbar(im, label="Niederschlagssumme in mm", shrink=0.4)
+            
+        elif "Gesamtbedeckung" in sel_param:
+            im = ax.pcolormesh(lons, lats, data, cmap=cmap_clouds, norm=mcolors.Normalize(vmin=0, vmax=100), shading='auto', zorder=5)
+            plt.colorbar(im, label="Bewölkung in %", shrink=0.4)
+
+        elif "Rel. Feuchte" in sel_param:
+            im = ax.pcolormesh(lons, lats, data, cmap=cmap_relhum, norm=mcolors.Normalize(vmin=0, vmax=100), shading='auto', zorder=5)
+            plt.colorbar(im, label="Relative Feuchte in %", shrink=0.4)
+            
+        elif "Schneehöhe" in sel_param:
+            # Modelle liefern oft in Metern -> Umrechnung in cm
+            val_cm = data * 100 if data.max() < 10 else data 
+            im = ax.pcolormesh(lons, lats, val_cm, cmap=cmap_snow, norm=mcolors.Normalize(vmin=0.1, vmax=50), shading='auto', zorder=5)
+            plt.colorbar(im, label="Schneehöhe in cm", shrink=0.4)
             
         elif "Geopot" in sel_param:
             val = (data / 9.80665) / 10 if data.max() > 10000 else data / 10
@@ -353,16 +354,16 @@ if generate:
             ax.clabel(cs, inline=True, fontsize=8, fmt='%1.0f')
 
         # ----------------------------------------------------------------------
-        # HEADER INFO
+        # DATEN-STEMPEL
         # ----------------------------------------------------------------------
         v_dt = datetime.strptime(run_id, "%Y%m%d%H").replace(tzinfo=timezone.utc) + timedelta(hours=sel_hour)
         info_txt = f"Modell: {sel_model}\nParameter: {sel_param}\nTermin: {v_dt.strftime('%d.%m.%Y %H:00')} UTC\nModell-Lauf: {run_id[-2:]}Z"
-        ax.text(0.02, 0.98, info_txt, transform=ax.transAxes, fontsize=7, fontweight='bold', va='top', bbox=dict(facecolor='white', alpha=0.7, boxstyle='round,pad=0.3', edgecolor='gray'), zorder=30)
+        ax.text(0.02, 0.98, info_txt, transform=ax.transAxes, fontsize=7, fontweight='bold', va='top', bbox=dict(facecolor='white', alpha=0.8, boxstyle='round,pad=0.3', edgecolor='gray'), zorder=30)
 
         st.pyplot(fig)
         cleanup_temp_files()
         
     else:
-        st.error(f"Schwerer Datenfehler: {sel_model} liefert für '{sel_param}' (Stunde +{sel_hour}h) aktuell keine bereinigten GRIB-Daten aus.")
+        st.error(f"Datenfehler: {sel_model} liefert für '{sel_param}' (+{sel_hour}h) aktuell keine Daten aus.")
 else:
-    st.info("ℹ️ Wähle links deine Parameter (Tipp: Taupunkt oder 0-Grad-Grenze für Gewitter checken!) und klicke auf Karte generieren.")
+    st.info("ℹ️ Wähle links deine Analyse-Parameter aus und generiere die Karte.")
