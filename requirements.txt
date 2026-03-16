@@ -7,3 +7,4 @@ numpy
 cfgrib
 folium
 streamlit-folium
+pykdtree
