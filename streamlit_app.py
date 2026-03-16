@@ -9,22 +9,24 @@ import matplotlib.colors as mcolors
 import matplotlib.patches as mpatches
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-import cartopy.io.img_tiles as cimgt  # NEU: Erlaubt das Einbetten von Karten-Tiles (RainViewer)
+import cartopy.io.img_tiles as cimgt
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import numpy as np
 import gzip
 import re
+import traceback
+import time
 
-# Optional: Streamlit Autorefresh für das Live-Radar
+# ==============================================================================
+# 1. SETUP, KONFIGURATION & AGGRESSIVES CACHE-MANAGEMENT
+# ==============================================================================
+# Optionale Autorefresh-Logik für das Live-Radar
 try:
     from streamlit_autorefresh import st_autorefresh
 except ImportError:
     st_autorefresh = None
 
-# ==============================================================================
-# 1. SETUP, KONFIGURATION & AGGRESSIVES CACHE-MANAGEMENT
-# ==============================================================================
 st.set_page_config(
     page_title="WarnwetterBB | Pro-Zentrale", 
     layout="wide", 
@@ -32,6 +34,11 @@ st.set_page_config(
 )
 
 def cleanup_temp_files():
+    """
+    Räumt temporäre Dateien auf, die beim Herunterladen und Entpacken 
+    der GRIB-Daten entstehen. Dies verhindert, dass der Container auf 
+    Streamlit Cloud nach einigen Tagen wegen Speichermangel abstürzt.
+    """
     temp_files = [
         "temp.grib", 
         "temp_gfs.grib", 
@@ -50,8 +57,10 @@ LOCAL_TZ = ZoneInfo("Europe/Berlin")
 WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 # ==============================================================================
-# 2. MASTER-FARBSKALEN
+# 2. MASTER-FARBSKALEN (DIESE BLEIBEN EXAKT WIE VORGEGEBEN)
 # ==============================================================================
+
+# Temperatur-Farbskala (-30 bis +30 Grad Celsius)
 temp_colors = [
     (0.0, '#D3D3D3'), (5/60, '#FFFFFF'), (10/60, '#FFC0CB'), (15/60, '#FF00FF'),
     (20/60, '#800080'), (20.01/60, '#00008B'), (25/60, '#0000CD'), (29.99/60, '#ADD8E6'),
@@ -60,6 +69,7 @@ temp_colors = [
 ]
 cmap_temp = mcolors.LinearSegmentedColormap.from_list("custom_temp", temp_colors)
 
+# Präzise Niederschlags-Farbskala
 precip_values = [0, 0.2, 0.5, 1.0, 1.5, 2.0, 3, 4, 5, 8, 12, 15, 20, 30, 40, 50]
 precip_colors = [
     '#FFFFFF', '#87CEEB', '#1E90FF', '#191970', '#006400', '#32CD32', '#FFFF00', 
@@ -71,6 +81,7 @@ precip_anchors = [v / vmax_precip for v in precip_values]
 cmap_precip = mcolors.LinearSegmentedColormap.from_list("custom_precip", list(zip(precip_anchors, precip_colors)))
 norm_precip = mcolors.Normalize(vmin=0, vmax=vmax_precip)
 
+# Aviation Flugsicherheits-Skala (Wolkenuntergrenze)
 base_levels = [0, 100, 200, 300, 400, 500, 750, 1000, 1500, 2000, 3000, 8000]
 base_colors = [
     '#FF00FF', '#FF0000', '#FFA500', '#FFFF00', '#ADFF2F', '#32CD32', '#00BFFF', 
@@ -79,6 +90,7 @@ base_colors = [
 cmap_base = mcolors.ListedColormap(base_colors)
 norm_base = mcolors.BoundaryNorm(base_levels, cmap_base.N)
 
+# CAPE-Skala (Konvektive verfügbare potentielle Energie)
 cape_levels = [0, 25, 50, 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 10000]
 cape_colors = [
     '#006400', '#2E8B57', '#ADFF2F', '#FFFF00', '#FFB347', '#FFA500', 
@@ -87,6 +99,7 @@ cape_colors = [
 cmap_cape = mcolors.ListedColormap(cape_colors)
 norm_cape = mcolors.BoundaryNorm(cape_levels, cmap_cape.N)
 
+# RADAR-Reflektivität (dBZ)
 radar_levels = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80]
 radar_colors = [
     '#FFFFFF', '#B0E0E6', '#00BFFF', '#0000FF', '#00FF00', '#32CD32', '#008000', 
@@ -95,6 +108,7 @@ radar_colors = [
 cmap_radar = mcolors.ListedColormap(radar_colors)
 norm_radar = mcolors.BoundaryNorm(radar_levels, cmap_radar.N)
 
+# Weitere Hilfsskalen (Feuchte, Wolken, Wind etc.)
 cmap_cin = mcolors.LinearSegmentedColormap.from_list("cin", ['#FFFFFF', '#ADD8E6', '#0000FF', '#00008B', '#000000'], N=256)
 cmap_clouds = mcolors.LinearSegmentedColormap.from_list("clouds", ['#1E90FF', '#87CEEB', '#D3D3D3', '#FFFFFF'], N=256)
 cmap_relhum = mcolors.LinearSegmentedColormap.from_list("relhum", ['#8B4513', '#F4A460', '#FFFFE0', '#90EE90', '#008000', '#0000FF'], N=256)
@@ -106,6 +120,7 @@ cmap_heli = mcolors.LinearSegmentedColormap.from_list("heli", ['#FFFFFF', '#00FF
 cmap_lifted = mcolors.LinearSegmentedColormap.from_list("lifted", ['#FF00FF', '#FF0000', '#FFA500', '#FFFF00', '#00FF00', '#0000FF'], N=256)
 cmap_sun = mcolors.LinearSegmentedColormap.from_list("sun", ['#808080', '#FFD700', '#FFA500', '#FF8C00'], N=256)
 
+# Signifikantes Wetter (ww-Codes) - Legenden-Zuweisung
 WW_LEGEND_DATA = {
     "Nebel": ("#FFFF00", list(range(40, 50))),
     "Regen leicht": ("#00FF00", [50, 51, 58, 60, 80]),
@@ -121,10 +136,11 @@ WW_LEGEND_DATA = {
     "Gewitter leicht": ("#FF00FF", [95]),
     "Gewitter mäßig/stark": ("#800080", [96, 97, 99])
 }
+# Transparenter Hintergrund plus die definierten Farben
 cmap_ww = mcolors.ListedColormap(['#FFFFFF00'] + [c for l, (c, codes) in WW_LEGEND_DATA.items()])
 
 # ==============================================================================
-# 3. DAS EISERNE ROUTING-SYSTEM
+# 3. DAS EISERNE ROUTING-SYSTEM (INKL. RADAR WEICHEN)
 # ==============================================================================
 MODEL_ROUTER = {
     "RainViewer Echtzeit-Radar": {
@@ -177,6 +193,10 @@ MODEL_ROUTER = {
 }
 
 def estimate_latest_run(model, now_utc):
+    """
+    Berechnet den aktuell verfügbaren Vorhersagelauf basierend auf den
+    festen Taktungen der Wettermodelle, um 404-Fehler zu minimieren.
+    """
     if "D2" in model or "EU" in model:
         run_h = ((now_utc.hour - 3) // 3) * 3
         if run_h < 0: return (now_utc - timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0)
@@ -196,8 +216,9 @@ def estimate_latest_run(model, now_utc):
 # ==============================================================================
 class RainViewerTiles(cimgt.GoogleWTS):
     """
-    Spezielle Cartopy-Klasse, die das Radar-Mosaik der RainViewer API abgreift.
-    Dies ist eine extrem stabile, hochauflösende Alternative zum DWD.
+    Spezielle Cartopy-Klasse, die das globale Radar-Mosaik der RainViewer API abgreift.
+    Diese API aggregiert DWD und andere europäische Radare in Echtzeit.
+    Die Tiles werden direkt in das ccrs.PlateCarree Koordinatensystem projiziert.
     """
     def __init__(self, host, path):
         self.host = host
@@ -206,67 +227,102 @@ class RainViewerTiles(cimgt.GoogleWTS):
 
     def _image_url(self, tile):
         x, y, z = tile
-        # Farbschema 2 (Meteo), Glättung 1, Schnee 1
-        return f"{self.host}{self.path}/256/{z}/{x}/{y}/2/1_1.png"
+        # Farbschema 2 (Meteo), Glättung 1, Schneefallunterscheidung 1
+        url = f"{self.host}{self.path}/256/{z}/{x}/{y}/2/1_1.png"
+        return url
 
 def fetch_rainviewer_metadata():
-    """Holt den aktuellsten Zeitstempel und Pfad vom RainViewer-Server."""
+    """
+    Holt den aktuellsten Zeitstempel und Basis-Pfad vom RainViewer-Server.
+    Wird benötigt, um die exakten URL-Strings für die Tiles zu konstruieren.
+    """
+    logs = ["Starte RainViewer API Request..."]
     try:
         r = requests.get("https://api.rainviewer.com/public/weather-maps.json", timeout=10)
+        r.raise_for_status()
         data = r.json()
         host = data.get("host", "https://tilecache.rainviewer.com")
-        past = data.get("radar", {}).get("past", [])
-        if past:
-            latest = past[-1]
-            return host, latest["path"], str(latest["time"]), [f"RainViewer API: {latest['path']}"]
+        past_radar = data.get("radar", {}).get("past", [])
+        
+        if past_radar:
+            # Das letzte Element in der Liste ist der aktuellste verfügbare Scan
+            latest_scan = past_radar[-1]
+            logs.append(f"RainViewer Pfad gefunden: {latest_scan['path']}")
+            return host, latest_scan["path"], str(latest_scan["time"]), logs
     except Exception as e:
-        return None, None, None, [str(e)]
-    return None, None, None, ["RainViewer keine Daten."]
+        logs.append(f"RainViewer Fehler: {str(e)}")
+        return None, None, None, logs
+    return None, None, None, logs
 
 def fetch_dwd_radar_raw(debug=False):
     """
     Holt DWD-Rohdaten und fixt den variablen Datei-Header,
-    indem es nach dem Hex-Code \x03 (End of Text) sucht.
+    indem es präzise nach dem Hex-Code \x03 (End of Text) sucht.
+    Das verhindert das Zusammenbrechen der 900x900 Matrix.
     """
     url_base = "https://opendata.dwd.de/weather/radar/composit/wn/"
-    logs = [f"Abfrage DWD Radar: {url_base}"]
+    logs = [f"Abfrage DWD Radar Directory: {url_base}"]
+    
     try:
         r_list = requests.get(url_base, timeout=10)
-        files = re.findall(r'href="(raa01-wn_10000-[0-9]{10}-dwd---bin\.gz)"', r_list.text)
-        if not files: return None, None, None, None, logs
+        r_list.raise_for_status()
         
-        # Versuche die letzten 3 Dateien (falls die neueste noch geschrieben wird)
-        for latest_file in sorted(list(set(files)))[-3:]:
+        # Regex-Suche nach dem WN-Produkt Format
+        files = re.findall(r'href="(raa01-wn_10000-[0-9]{10}-dwd---bin\.gz)"', r_list.text)
+        if not files: 
+            return None, None, None, None, logs
+        
+        # Versuche die letzten 3 Dateien (falls die neueste noch geschrieben wird und 0 Bytes hat)
+        unique_files = sorted(list(set(files)))
+        for latest_file in unique_files[-3:]:
             file_url = url_base + latest_file
-            logs.append(f"Download: {file_url}")
+            logs.append(f"Versuche Download: {file_url}")
+            
             r = requests.get(file_url, timeout=15)
-            if r.status_code == 200:
+            if r.status_code == 200 and len(r.content) > 1000:
                 with gzip.open(io.BytesIO(r.content), 'rb') as f:
                     content = f.read()
                     
                     # DER ENTSCHEIDENDE FIX: Dynamische Header-Erkennung
+                    # Der DWD Header variiert in der Länge, endet aber zwingend mit Hex \x03
                     header_end = content.find(b'\x03')
+                    
                     if header_end != -1:
+                        # Alles nach \x03 sind die eigentlichen Radardaten
                         raw_data = np.frombuffer(content[header_end+1:], dtype=np.uint8)
                         
+                        # Absicherung der Array-Länge
                         if len(raw_data) >= 810000:
                             data_2d = raw_data[:810000].reshape(900, 900).astype(float)
+                            
+                            # Umrechnung in dBZ
                             data_dbz = (data_2d - 64) / 2.0
+                            
+                            # Werte unter Null sind Rauschen/Clutter und werden genulled
                             data_dbz[data_dbz < 0] = np.nan
                             
+                            # Generiere das DWD-Referenz-Koordinatengitter
                             lons_1d = np.linspace(2.0, 16.0, 900)
                             lats_1d = np.linspace(46.0, 56.0, 900)
                             lons, lats = np.meshgrid(lons_1d, lats_1d)
                             
+                            # Extrahiere Zeitstempel aus dem Dateinamen
                             ts_match = re.search(r'-([0-9]{10})-dwd', latest_file)
                             ts = ts_match.group(1) if ts_match else datetime.now().strftime("%y%m%d%H%M")
+                            
+                            logs.append("DWD Radar erfolgreich decodiert.")
+                            # Matrix muss gespiegelt werden für korrekte N-S Ausrichtung
                             return data_dbz[::-1], lons, lats, ts, logs
+            else:
+                logs.append(f"Datei fehlerhaft oder noch im Schreibprozess (Status {r.status_code})")
+                
     except Exception as e:
-        logs.append(str(e))
+        logs.append(f"Kritischer Fehler im DWD Modul: {str(e)}")
+        
     return None, None, None, None, logs
 
 # ==============================================================================
-# 5. DYNAMISCHE SIDEBAR
+# 5. DYNAMISCHE SIDEBAR INKL. AUTO-REFRESH
 # ==============================================================================
 with st.sidebar:
     st.header("🛰️ Modell-Zentrale")
@@ -285,6 +341,7 @@ with st.sidebar:
     
     with st.expander("⏱️ 4. Vorhersage-Stunde (MEZ/MESZ)", expanded=True):
         if "Radar" in sel_model:
+            # Bei Live-Radar gibt es keine Prognoseschritte in der Zukunft
             st.info("Echtzeit-Daten: Die Zeitauswahl ist automatisch deaktiviert.")
             sel_hour = 0
             sel_hour_str = "Live"
@@ -311,10 +368,11 @@ with st.sidebar:
     
     st.markdown("---")
     show_isobars = st.checkbox("Isobaren (Luftdruck) einblenden", value=True)
-    show_storms = st.checkbox("⚡ Gewitter-Risiko rot schraffieren", value=True, help="Zieht rote Linien über Gewitter-Gebiete.")
+    show_storms = st.checkbox("⚡ Gewitter-Risiko rot schraffieren", value=True, help="Zieht markante rote Linien über Gewitter-Gebiete.")
     
-    # Auto-Update Schalter für das Live-Radar
-    enable_refresh = st.checkbox("🔄 Auto-Update (5 Min.)", value=False)
+    # Auto-Update Schalter exklusiv für das Radar
+    st.markdown("---")
+    enable_refresh = st.checkbox("🔄 Auto-Update (5 Min.)", value=False, help="Die Karte aktualisiert sich selbst alle 300 Sekunden. Ideal für dauerhafte Überwachung.")
     if enable_refresh and st_autorefresh is not None:
         st_autorefresh(interval=300000, key="auto_refresh_radar")
         
@@ -322,14 +380,20 @@ with st.sidebar:
     generate = st.button("🚀 Profi-Karte generieren", use_container_width=True)
     
     with st.expander("🛠️ Entwickler-Konsole"):
-        debug_mode = st.checkbox("URL-Ping aktivieren")
+        debug_mode = st.checkbox("URL-Ping aktivieren", help="Zeigt interne Request-Pfade zur Fehlerbehebung an.")
 
 # ==============================================================================
-# 6. DATA FETCH ENGINE
+# 6. DATA FETCH ENGINE (PROGNOSEMODELLE)
 # ==============================================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_meteo_data(model, param, hr, debug=False):
-    # RADAR-ABFANGJÄGER
+    """
+    Der Kern der App: Lädt GRIB2-Daten von DWD/NOAA/ECMWF herunter und parst sie 
+    mit xarray/cfgrib. Fängt über eine Weiche auch Radar-Aufrufe ab.
+    """
+    # ---------------------------------------------------------
+    # RADAR-ABFANGJÄGER LOGIK
+    # ---------------------------------------------------------
     if "RainViewer" in model:
         host, path, ts, logs = fetch_rainviewer_metadata()
         if host and path:
@@ -339,6 +403,9 @@ def fetch_meteo_data(model, param, hr, debug=False):
     if "DWD Echtzeit" in model:
         return fetch_dwd_radar_raw(debug)
 
+    # ---------------------------------------------------------
+    # HERKÖMMLICHE GRIB LOGIK
+    # ---------------------------------------------------------
     dyn_cloud_base = "ceiling" if "D2" in model else "hbas_con"
     
     p_map = {
@@ -351,9 +418,10 @@ def fetch_meteo_data(model, param, hr, debug=False):
         "Wolkenobergrenze (m)": "htop_con", "Spezifische Feuchte (g/kg)": "qv",
         "Helizität / SRH (m²/s²)": "uh_max", "Sonnenscheindauer (Min)": "dur_sun", "Lifted Index (K)": "sli"
     }
+    
     key = p_map.get(param, "t_2m")
     now = datetime.now(timezone.utc)
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) WarnwetterBB/1.0'}
     debug_logs = []
 
     if "ICON" in model:
@@ -362,6 +430,7 @@ def fetch_meteo_data(model, param, hr, debug=False):
         elif "D2" in model: m_dir, reg_str = "icon-d2", "icon-d2_germany"
         else: m_dir, reg_str = "icon-eu", "icon-eu_europe"
         
+        # Iteriere rückwärts durch die Stunden, um den frischesten verfügbaren Lauf zu finden
         for off in range(1, 18):
             t = now - timedelta(hours=off)
             if is_global: run = (t.hour // 6) * 6
@@ -390,7 +459,9 @@ def fetch_meteo_data(model, param, hr, debug=False):
                     lons, lats = ds.longitude.values, ds.latitude.values
                     if lons.ndim == 1: lons, lats = np.meshgrid(lons, lats)
                     return data, lons, lats, dt_s, debug_logs
-            except Exception: continue
+            except Exception as e: 
+                debug_logs.append(f"GRIB-Parse Error: {str(e)}")
+                continue
 
     elif "GFS" in model:
         gfs_map = {
@@ -453,210 +524,237 @@ def fetch_meteo_data(model, param, hr, debug=False):
     return None, None, None, None, debug_logs
 
 # ==============================================================================
-# 7. KARTENGENERATOR & PLOTTING
+# 7. KARTENGENERATOR & PLOTTING SYSTEM
 # ==============================================================================
+# Das Plotting wird aktiviert, wenn der Button gedrückt wird ODER das Radar auto-refresht
 if generate or (enable_refresh and "Radar" in sel_model):
     cleanup_temp_files()
     
-    with st.spinner(f"🛰️ Lade {sel_param} aus {sel_model}..."):
-        data, lons, lats, run_id, d_logs = fetch_meteo_data(sel_model, sel_param, sel_hour, debug_mode)
-        iso_data, ilons, ilats, _, _ = fetch_meteo_data(sel_model, "Isobaren", sel_hour) if show_isobars and "Radar" not in sel_model else (None, None, None, None, None)
+    with st.spinner(f"🛰️ Bereite Daten für '{sel_param}' aus '{sel_model}' auf..."):
         
+        # 1. Hauptdatensatz laden
+        data, lons, lats, run_id, d_logs = fetch_meteo_data(sel_model, sel_param, sel_hour, debug_mode)
+        
+        # 2. Isobaren-Overlay laden (Übersprungen bei Radar, da dort nicht relevant)
+        if show_isobars and "Radar" not in sel_model:
+            iso_data, ilons, ilats, _, _ = fetch_meteo_data(sel_model, "Isobaren", sel_hour) 
+        else:
+            iso_data, ilons, ilats = None, None, None
+            
+        # 3. Gewitter-Overlay laden (Nur wenn Schalter an und im Modell verfügbar)
         ww_data = None
         if show_storms and "Radar" not in sel_model and sel_param != "Signifikantes Wetter" and "Signifikantes Wetter" in MODEL_ROUTER[sel_model]["params"]:
             ww_data, wlons, wlats, _, _ = fetch_meteo_data(sel_model, "Signifikantes Wetter", sel_hour, False)
 
+    # Zeige Konsolenausgaben, wenn Debug-Modus aktiv
     if debug_mode and d_logs:
-        st.write("📡 **Interne Server-Pings (Debug):**")
-        for log in d_logs[:3]: st.code(log)
+        st.write("📡 **Interne Server-Pings (Debug-Konsole):**")
+        for log in d_logs: 
+            st.code(log)
 
+    # Plotting startet, wenn Daten erfolgreich geladen wurden
     if data is not None:
-        fig, ax = plt.subplots(figsize=(8, 10), subplot_kw={'projection': ccrs.PlateCarree()}, dpi=150)
-        
-        extents = {
-            "Deutschland": [5.8, 15.2, 47.2, 55.1], 
-            "Brandenburg/Berlin": [11.2, 14.8, 51.2, 53.6], 
-            "Mitteleuropa (DE, PL)": [4.0, 25.0, 45.0, 56.0], 
-            "Alpenraum": [5.5, 17.0, 44.0, 49.5], 
-            "Europa": [-12, 40, 34, 66]
-        }
-        ax.set_extent(extents[sel_region])
+        try:
+            # Erstelle die Karte mit Cartopy Projection
+            fig, ax = plt.subplots(figsize=(8, 10), subplot_kw={'projection': ccrs.PlateCarree()}, dpi=150)
+            
+            extents = {
+                "Deutschland": [5.8, 15.2, 47.2, 55.1], 
+                "Brandenburg/Berlin": [11.2, 14.8, 51.2, 53.6], 
+                "Mitteleuropa (DE, PL)": [4.0, 25.0, 45.0, 56.0], 
+                "Alpenraum": [5.5, 17.0, 44.0, 49.5], 
+                "Europa": [-12, 40, 34, 66]
+            }
+            ax.set_extent(extents[sel_region])
 
-        ax.add_feature(cfeature.COASTLINE, linewidth=0.8, edgecolor='black', zorder=12)
-        ax.add_feature(cfeature.BORDERS, linewidth=0.8, edgecolor='black', zorder=12)
-        states = cfeature.NaturalEarthFeature(category='cultural', name='admin_1_states_provinces_lines', scale='10m', facecolor='none')
-        ax.add_feature(states, linewidth=0.5, edgecolor='black', zorder=12)
+            # Basiskarten-Elemente einzeichnen
+            ax.add_feature(cfeature.COASTLINE, linewidth=0.8, edgecolor='black', zorder=12)
+            ax.add_feature(cfeature.BORDERS, linewidth=0.8, edgecolor='black', zorder=12)
+            states = cfeature.NaturalEarthFeature(category='cultural', name='admin_1_states_provinces_lines', scale='10m', facecolor='none')
+            ax.add_feature(states, linewidth=0.5, edgecolor='black', zorder=12)
 
-        # ----------------------------------------------------------------------
-        # PLOTTING-LOGIK
-        # ----------------------------------------------------------------------
-        if "Temperatur" in sel_param or "850 hPa Temp." in sel_param or "Taupunkt" in sel_param:
-            val_c = data - 273.15 if data.max() > 100 else data
-            label_txt = "Taupunkt in °C" if "Taupunkt" in sel_param else "Temperatur in °C"
-            im = ax.pcolormesh(lons, lats, val_c, cmap=cmap_temp, norm=mcolors.Normalize(vmin=-30, vmax=30), shading='auto', zorder=5)
-            plt.colorbar(im, label=label_txt, shrink=0.4, pad=0.02, ticks=np.arange(-30, 31, 10))
+            # ----------------------------------------------------------------------
+            # DYNAMISCHE PARAMETER-PLOTTING-LOGIK
+            # WICHTIG: Alle Colorbars nutzen jetzt 'fig.colorbar(im, ax=ax, ...)' 
+            # um Matplotlib ValueError bei fehlender Axes-Zuweisung komplett auszuschließen.
+            # ----------------------------------------------------------------------
             
-        elif "CAPE" in sel_param:
-            im = ax.pcolormesh(lons, lats, data, cmap=cmap_cape, norm=norm_cape, shading='auto', zorder=5)
-            plt.colorbar(im, label="CAPE (Energie) in J/kg", shrink=0.4, ticks=[0, 100, 500, 1000, 2000, 3000, 5000])
-            
-        elif "CIN" in sel_param:
-            im = ax.pcolormesh(lons, lats, np.abs(data), cmap=cmap_cin, norm=mcolors.Normalize(vmin=0, vmax=500), shading='auto', zorder=5)
-            plt.colorbar(im, label="CIN (Hemmung/Deckel) in J/kg", shrink=0.4)
-            
-        elif "Radar" in sel_param: 
-            if "RainViewer" in sel_model:
-                # Host und Path wurden per Funktion elegant als "data" und "lons" durchgereicht
-                rv_tiles = RainViewerTiles(host=data, path=lons)
-                zoom_l = {"Deutschland": 6, "Brandenburg/Berlin": 8, "Mitteleuropa (DE, PL)": 6, "Alpenraum": 7, "Europa": 5}
-                ax.add_image(rv_tiles, zoom_l.get(sel_region, 6), zorder=5)
+            if "Temperatur" in sel_param or "850 hPa Temp." in sel_param or "Taupunkt" in sel_param:
+                val_c = data - 273.15 if data.max() > 100 else data
+                label_txt = "Taupunkt in °C" if "Taupunkt" in sel_param else "Temperatur in °C"
+                im = ax.pcolormesh(lons, lats, val_c, cmap=cmap_temp, norm=mcolors.Normalize(vmin=-30, vmax=30), shading='auto', zorder=5)
+                fig.colorbar(im, ax=ax, label=label_txt, shrink=0.4, pad=0.02, ticks=np.arange(-30, 31, 10))
                 
-                # Legende erzeugen, damit man die dBZ-Werte ablesen kann
-                sm = plt.cm.ScalarMappable(cmap=cmap_radar, norm=norm_radar)
-                sm.set_array([])
-                plt.colorbar(sm, label="Radar-Reflektivität in dBZ (RainViewer-Farben)", shrink=0.4)
-            else:
-                # Normales DWD-Rohdaten Raster
-                im = ax.pcolormesh(lons, lats, data, cmap=cmap_radar, norm=norm_radar, shading='auto', zorder=5)
-                plt.colorbar(im, label="Radar-Reflektivität in dBZ", shrink=0.4, ticks=[0, 15, 30, 45, 60, 75])
-            
-        elif "Niederschlag" in sel_param:
-            im = ax.pcolormesh(lons, lats, data, cmap=cmap_precip, norm=norm_precip, shading='auto', zorder=5)
-            ticks_precip = list(range(0, 55, 5)) 
-            plt.colorbar(im, label="Niederschlagssumme in mm", shrink=0.4, ticks=ticks_precip)
-            
-        elif "Gesamtbedeckung" in sel_param:
-            im = ax.pcolormesh(lons, lats, data, cmap=cmap_clouds, norm=mcolors.Normalize(vmin=0, vmax=100), shading='auto', zorder=5)
-            plt.colorbar(im, label="Bewölkung in %", shrink=0.4)
-
-        elif "Rel. Feuchte" in sel_param:
-            im = ax.pcolormesh(lons, lats, data, cmap=cmap_relhum, norm=mcolors.Normalize(vmin=0, vmax=100), shading='auto', zorder=5)
-            plt.colorbar(im, label="Relative Feuchte in %", shrink=0.4)
-            
-        elif "Schneehöhe" in sel_param:
-            val_cm = data * 100 if data.max() < 10 else data 
-            im = ax.pcolormesh(lons, lats, val_cm, cmap=cmap_snow, norm=mcolors.Normalize(vmin=0.1, vmax=50), shading='auto', zorder=5)
-            plt.colorbar(im, label="Schneehöhe in cm", shrink=0.4)
-            
-        elif "Geopot" in sel_param:
-            val = (data / 9.80665) / 10 if data.max() > 10000 else data / 10
-            im = ax.pcolormesh(lons, lats, val, cmap='nipy_spectral', shading='auto', zorder=5)
-            plt.colorbar(im, label="Geopotential in gpdm", shrink=0.4)
-            
-        elif "Windböen" in sel_param:
-            im = ax.pcolormesh(lons, lats, data * 3.6, cmap=cmap_wind, norm=mcolors.Normalize(vmin=0, vmax=150), shading='auto', zorder=5)
-            plt.colorbar(im, label="Windböen in km/h", shrink=0.4, pad=0.02)
-            
-        elif "0-Grad-Grenze" in sel_param:
-            im = ax.pcolormesh(lons, lats, data, cmap='terrain', norm=mcolors.Normalize(vmin=0, vmax=4500), shading='auto', zorder=5)
-            plt.colorbar(im, label="0-Grad-Grenze in m", shrink=0.4)
-            
-        elif "Bodendruck" in sel_param:
-            val_hpa = data / 100 if data.max() > 5000 else data
-            im = ax.pcolormesh(lons, lats, val_hpa, cmap='jet', shading='auto', zorder=5)
-            plt.colorbar(im, label="Bodendruck in hPa", shrink=0.4)
-            
-        elif "Sichtweite" in sel_param:
-            im = ax.pcolormesh(lons, lats, data, cmap=cmap_vis, norm=mcolors.Normalize(vmin=0, vmax=10000), shading='auto', zorder=5)
-            plt.colorbar(im, label="Sichtweite in m (Weiß=Nebel)", shrink=0.4)
-            
-        elif "Wolkenuntergrenze" in sel_param:
-            im = ax.pcolormesh(lons, lats, data, cmap=cmap_base, norm=norm_base, shading='auto', zorder=5)
-            plt.colorbar(im, label="Wolkenuntergrenze in m", shrink=0.4, ticks=base_levels)
-            
-        elif "Wolkenobergrenze" in sel_param:
-            im = ax.pcolormesh(lons, lats, data, cmap='Blues', norm=mcolors.Normalize(vmin=0, vmax=13000), shading='auto', zorder=5)
-            plt.colorbar(im, label="Wolkenobergrenze in m", shrink=0.4)
-            
-        elif "Spezifische Feuchte" in sel_param:
-            im = ax.pcolormesh(lons, lats, data * 1000, cmap='YlGnBu', norm=mcolors.Normalize(vmin=0, vmax=20), shading='auto', zorder=5)
-            plt.colorbar(im, label="Spezifische Feuchte in g/kg", shrink=0.4)
-            
-        elif "Helizität" in sel_param:
-            im = ax.pcolormesh(lons, lats, data, cmap=cmap_heli, norm=mcolors.Normalize(vmin=0, vmax=500), shading='auto', zorder=5)
-            plt.colorbar(im, label="Helizität / SRH (Tornadogefahr) in m²/s²", shrink=0.4)
-            
-        elif "Sonnenscheindauer" in sel_param:
-            im = ax.pcolormesh(lons, lats, data / 60, cmap=cmap_sun, norm=mcolors.Normalize(vmin=0, vmax=60), shading='auto', zorder=5)
-            plt.colorbar(im, label="Sonnenscheindauer (Minuten/Stunde)", shrink=0.4)
-            
-        elif "Lifted Index" in sel_param:
-            im = ax.pcolormesh(lons, lats, data, cmap=cmap_lifted, norm=mcolors.Normalize(vmin=-10, vmax=10), shading='auto', zorder=5)
-            plt.colorbar(im, label="Lifted Index in K (Blau=Stabil, Rot=Gewitter)", shrink=0.4)
-            
-        elif "Signifikantes Wetter" in sel_param:
-            grid = np.zeros_like(data)
-            for i, (l, (c, codes)) in enumerate(WW_LEGEND_DATA.items(), 1):
-                for code in codes: grid[data == code] = i
-            ax.pcolormesh(lons, lats, grid, cmap=cmap_ww, shading='nearest', zorder=5)
-            patches = [mpatches.Patch(color=c, label=l) for l, (c, _) in WW_LEGEND_DATA.items()]
-            ax.legend(handles=patches, loc='lower left', title="Wetter-Klassifikation", fontsize='6', title_fontsize='7', framealpha=0.9).set_zorder(25)
-
-        # ----------------------------------------------------------------------
-        # DIE ROTE GEWITTER-SCHRAFFUR OVERLAY (//////)
-        # ----------------------------------------------------------------------
-        if show_storms and ww_data is not None:
-            storm_mask = np.isin(ww_data, [95, 96, 97, 99])
-            if np.any(storm_mask):
-                plot_ww = np.zeros_like(ww_data)
-                plot_ww[storm_mask] = 1 
-                plt.rcParams['hatch.linewidth'] = 2.0 
-                ax.contourf(wlons, wlats, plot_ww, levels=[0.5, 1.5], colors='none', hatches=['////'], edgecolors='red', zorder=10)
-
-        # ----------------------------------------------------------------------
-        # ISOBAREN OVERLAY
-        # ----------------------------------------------------------------------
-        if iso_data is not None:
-            p_hpa = iso_data / 100 if iso_data.max() > 5000 else iso_data
-            if ilons.ndim == 1: ilons, ilats = np.meshgrid(ilons, ilats)
-            cs = ax.contour(ilons, ilats, p_hpa, colors='black', linewidths=0.7, levels=np.arange(940, 1060, 4), zorder=20)
-            ax.clabel(cs, inline=True, fontsize=8, fmt='%1.0f')
-
-        # ----------------------------------------------------------------------
-        # HEADER INFO
-        # ----------------------------------------------------------------------
-        if "Radar" in sel_model:
-            try:
+            elif "CAPE" in sel_param:
+                im = ax.pcolormesh(lons, lats, data, cmap=cmap_cape, norm=norm_cape, shading='auto', zorder=5)
+                fig.colorbar(im, ax=ax, label="CAPE (Energie) in J/kg", shrink=0.4, ticks=[0, 100, 500, 1000, 2000, 3000, 5000])
+                
+            elif "CIN" in sel_param:
+                im = ax.pcolormesh(lons, lats, np.abs(data), cmap=cmap_cin, norm=mcolors.Normalize(vmin=0, vmax=500), shading='auto', zorder=5)
+                fig.colorbar(im, ax=ax, label="CIN (Hemmung/Deckel) in J/kg", shrink=0.4)
+                
+            elif "Radar" in sel_param: 
                 if "RainViewer" in sel_model:
-                    dt_obj = datetime.fromtimestamp(int(run_id), tz=timezone.utc)
+                    # Bei RainViewer sind 'data' und 'lons' die Host und Path Parameter
+                    rv_tiles = RainViewerTiles(host=data, path=lons)
+                    zoom_l = {"Deutschland": 6, "Brandenburg/Berlin": 8, "Mitteleuropa (DE, PL)": 6, "Alpenraum": 7, "Europa": 5}
+                    ax.add_image(rv_tiles, zoom_l.get(sel_region, 6), zorder=5)
+                    
+                    # Dummy ScalarMappable erstellen, um RainViewer Farben zu erklären
+                    # DER ENTSCHEIDENDE FIX: ax=ax MUSS hier zwingend übergeben werden!
+                    sm = plt.cm.ScalarMappable(cmap=cmap_radar, norm=norm_radar)
+                    sm.set_array([])
+                    fig.colorbar(sm, ax=ax, label="Radar-Reflektivität in dBZ (RainViewer-Farben)", shrink=0.4)
                 else:
-                    dt_obj = datetime.strptime(run_id, "%y%m%d%H%M").replace(tzinfo=timezone.utc)
-                dt_loc = dt_obj.astimezone(LOCAL_TZ)
-                time_display = dt_loc.strftime('%d.%m.%Y %H:%M') + (" MESZ" if dt_loc.dst() else " MEZ")
-            except Exception:
-                time_display = run_id
-            info_txt = f"Modell: {sel_model}\nParameter: {sel_param}\nLive-Stand: {time_display}\n(Quelle: {'RainViewer' if 'RainViewer' in sel_model else 'DWD OpenData'})"
-        else:
-            v_dt_utc = datetime.strptime(run_id, "%Y%m%d%H").replace(tzinfo=timezone.utc) + timedelta(hours=sel_hour)
-            v_dt_loc = v_dt_utc.astimezone(LOCAL_TZ)
-            tz_str = "MESZ" if v_dt_loc.dst() else "MEZ"
-            info_txt = f"Modell: {sel_model}\nParameter: {sel_param}\nTermin: {v_dt_loc.strftime('%d.%m.%Y %H:%M')} {tz_str}\nModell-Lauf: {run_id[-2:]}Z"
-            
-        ax.text(0.02, 0.98, info_txt, transform=ax.transAxes, fontsize=7, fontweight='bold', va='top', bbox=dict(facecolor='white', alpha=0.8, boxstyle='round,pad=0.3', edgecolor='gray'), zorder=30)
+                    # Normales DWD-Rohdaten Raster (Matrix Rendering)
+                    im = ax.pcolormesh(lons, lats, data, cmap=cmap_radar, norm=norm_radar, shading='auto', zorder=5)
+                    fig.colorbar(im, ax=ax, label="Radar-Reflektivität in dBZ", shrink=0.4, ticks=[0, 15, 30, 45, 60, 75])
+                
+            elif "Niederschlag" in sel_param:
+                im = ax.pcolormesh(lons, lats, data, cmap=cmap_precip, norm=norm_precip, shading='auto', zorder=5)
+                ticks_precip = list(range(0, 55, 5)) 
+                fig.colorbar(im, ax=ax, label="Niederschlagssumme in mm", shrink=0.4, ticks=ticks_precip)
+                
+            elif "Gesamtbedeckung" in sel_param:
+                im = ax.pcolormesh(lons, lats, data, cmap=cmap_clouds, norm=mcolors.Normalize(vmin=0, vmax=100), shading='auto', zorder=5)
+                fig.colorbar(im, ax=ax, label="Bewölkung in %", shrink=0.4)
 
-        st.pyplot(fig)
-        
-        # ----------------------------------------------------------------------
-        # BILD-DOWNLOAD GENERIEREN
-        # ----------------------------------------------------------------------
-        img_buffer = io.BytesIO()
-        fig.savefig(img_buffer, format='png', bbox_inches='tight', dpi=150)
-        img_buffer.seek(0)
-        
-        col1, col2, col3 = st.columns([1,2,1])
-        with col2:
-            dl_suffix = "LIVE" if "Radar" in sel_model else f"{sel_hour}h"
-            st.download_button(
-                label="📥 Karte als PNG speichern",
-                data=img_buffer,
-                file_name=f"WarnwetterBB_{sel_model}_{sel_param.replace(' ', '_')}_{dl_suffix}.png",
-                mime="image/png",
-                use_container_width=True
-            )
-        
-        cleanup_temp_files()
-        
+            elif "Rel. Feuchte" in sel_param:
+                im = ax.pcolormesh(lons, lats, data, cmap=cmap_relhum, norm=mcolors.Normalize(vmin=0, vmax=100), shading='auto', zorder=5)
+                fig.colorbar(im, ax=ax, label="Relative Feuchte in %", shrink=0.4)
+                
+            elif "Schneehöhe" in sel_param:
+                val_cm = data * 100 if data.max() < 10 else data 
+                im = ax.pcolormesh(lons, lats, val_cm, cmap=cmap_snow, norm=mcolors.Normalize(vmin=0.1, vmax=50), shading='auto', zorder=5)
+                fig.colorbar(im, ax=ax, label="Schneehöhe in cm", shrink=0.4)
+                
+            elif "Geopot" in sel_param:
+                val = (data / 9.80665) / 10 if data.max() > 10000 else data / 10
+                im = ax.pcolormesh(lons, lats, val, cmap='nipy_spectral', shading='auto', zorder=5)
+                fig.colorbar(im, ax=ax, label="Geopotential in gpdm", shrink=0.4)
+                
+            elif "Windböen" in sel_param:
+                im = ax.pcolormesh(lons, lats, data * 3.6, cmap=cmap_wind, norm=mcolors.Normalize(vmin=0, vmax=150), shading='auto', zorder=5)
+                fig.colorbar(im, ax=ax, label="Windböen in km/h", shrink=0.4, pad=0.02)
+                
+            elif "0-Grad-Grenze" in sel_param:
+                im = ax.pcolormesh(lons, lats, data, cmap='terrain', norm=mcolors.Normalize(vmin=0, vmax=4500), shading='auto', zorder=5)
+                fig.colorbar(im, ax=ax, label="0-Grad-Grenze in m", shrink=0.4)
+                
+            elif "Bodendruck" in sel_param:
+                val_hpa = data / 100 if data.max() > 5000 else data
+                im = ax.pcolormesh(lons, lats, val_hpa, cmap='jet', shading='auto', zorder=5)
+                fig.colorbar(im, ax=ax, label="Bodendruck in hPa", shrink=0.4)
+                
+            elif "Sichtweite" in sel_param:
+                im = ax.pcolormesh(lons, lats, data, cmap=cmap_vis, norm=mcolors.Normalize(vmin=0, vmax=10000), shading='auto', zorder=5)
+                fig.colorbar(im, ax=ax, label="Sichtweite in m (Weiß=Nebel)", shrink=0.4)
+                
+            elif "Wolkenuntergrenze" in sel_param:
+                im = ax.pcolormesh(lons, lats, data, cmap=cmap_base, norm=norm_base, shading='auto', zorder=5)
+                fig.colorbar(im, ax=ax, label="Wolkenuntergrenze in m", shrink=0.4, ticks=base_levels)
+                
+            elif "Wolkenobergrenze" in sel_param:
+                im = ax.pcolormesh(lons, lats, data, cmap='Blues', norm=mcolors.Normalize(vmin=0, vmax=13000), shading='auto', zorder=5)
+                fig.colorbar(im, ax=ax, label="Wolkenobergrenze in m", shrink=0.4)
+                
+            elif "Spezifische Feuchte" in sel_param:
+                im = ax.pcolormesh(lons, lats, data * 1000, cmap='YlGnBu', norm=mcolors.Normalize(vmin=0, vmax=20), shading='auto', zorder=5)
+                fig.colorbar(im, ax=ax, label="Spezifische Feuchte in g/kg", shrink=0.4)
+                
+            elif "Helizität" in sel_param:
+                im = ax.pcolormesh(lons, lats, data, cmap=cmap_heli, norm=mcolors.Normalize(vmin=0, vmax=500), shading='auto', zorder=5)
+                fig.colorbar(im, ax=ax, label="Helizität / SRH (Tornadogefahr) in m²/s²", shrink=0.4)
+                
+            elif "Sonnenscheindauer" in sel_param:
+                im = ax.pcolormesh(lons, lats, data / 60, cmap=cmap_sun, norm=mcolors.Normalize(vmin=0, vmax=60), shading='auto', zorder=5)
+                fig.colorbar(im, ax=ax, label="Sonnenscheindauer (Minuten/Stunde)", shrink=0.4)
+                
+            elif "Lifted Index" in sel_param:
+                im = ax.pcolormesh(lons, lats, data, cmap=cmap_lifted, norm=mcolors.Normalize(vmin=-10, vmax=10), shading='auto', zorder=5)
+                fig.colorbar(im, ax=ax, label="Lifted Index in K (Blau=Stabil, Rot=Gewitter)", shrink=0.4)
+                
+            elif "Signifikantes Wetter" in sel_param:
+                grid = np.zeros_like(data)
+                for i, (l, (c, codes)) in enumerate(WW_LEGEND_DATA.items(), 1):
+                    for code in codes: grid[data == code] = i
+                ax.pcolormesh(lons, lats, grid, cmap=cmap_ww, shading='nearest', zorder=5)
+                patches = [mpatches.Patch(color=c, label=l) for l, (c, _) in WW_LEGEND_DATA.items()]
+                ax.legend(handles=patches, loc='lower left', title="Wetter-Klassifikation", fontsize='6', title_fontsize='7', framealpha=0.9).set_zorder(25)
+
+            # ----------------------------------------------------------------------
+            # GEWITTER-SCHRAFFUR OVERLAY (//////)
+            # ----------------------------------------------------------------------
+            if show_storms and ww_data is not None:
+                storm_mask = np.isin(ww_data, [95, 96, 97, 99])
+                if np.any(storm_mask):
+                    plot_ww = np.zeros_like(ww_data)
+                    plot_ww[storm_mask] = 1 
+                    plt.rcParams['hatch.linewidth'] = 2.0 
+                    ax.contourf(wlons, wlats, plot_ww, levels=[0.5, 1.5], colors='none', hatches=['////'], edgecolors='red', zorder=10)
+
+            # ----------------------------------------------------------------------
+            # ISOBAREN OVERLAY
+            # ----------------------------------------------------------------------
+            if iso_data is not None:
+                p_hpa = iso_data / 100 if iso_data.max() > 5000 else iso_data
+                if ilons.ndim == 1: ilons, ilats = np.meshgrid(ilons, ilats)
+                cs = ax.contour(ilons, ilats, p_hpa, colors='black', linewidths=0.7, levels=np.arange(940, 1060, 4), zorder=20)
+                ax.clabel(cs, inline=True, fontsize=8, fmt='%1.0f')
+
+            # ----------------------------------------------------------------------
+            # HEADER INFO BOX (MIT EIGENER RADAR-ZEITRECHNUNG)
+            # ----------------------------------------------------------------------
+            if "Radar" in sel_model:
+                try:
+                    if "RainViewer" in sel_model:
+                        # RainViewer liefert UNIX-Timestamps
+                        dt_obj = datetime.fromtimestamp(int(run_id), tz=timezone.utc)
+                    else:
+                        # DWD liefert Format YYMMDDHHMM
+                        dt_obj = datetime.strptime(run_id, "%y%m%d%H%M").replace(tzinfo=timezone.utc)
+                    dt_loc = dt_obj.astimezone(LOCAL_TZ)
+                    time_display = dt_loc.strftime('%d.%m.%Y %H:%M') + (" MESZ" if dt_loc.dst() else " MEZ")
+                except Exception:
+                    time_display = run_id
+                info_txt = f"Modell: {sel_model}\nParameter: {sel_param}\nLive-Stand: {time_display}\n(Quelle: {'RainViewer API' if 'RainViewer' in sel_model else 'DWD OpenData'})"
+            else:
+                # Zeigeberechnung für Prognosemodelle
+                v_dt_utc = datetime.strptime(run_id, "%Y%m%d%H").replace(tzinfo=timezone.utc) + timedelta(hours=sel_hour)
+                v_dt_loc = v_dt_utc.astimezone(LOCAL_TZ)
+                tz_str = "MESZ" if v_dt_loc.dst() else "MEZ"
+                info_txt = f"Modell: {sel_model}\nParameter: {sel_param}\nTermin: {v_dt_loc.strftime('%d.%m.%Y %H:%M')} {tz_str}\nModell-Lauf: {run_id[-2:]}Z"
+                
+            ax.text(0.02, 0.98, info_txt, transform=ax.transAxes, fontsize=7, fontweight='bold', va='top', bbox=dict(facecolor='white', alpha=0.8, boxstyle='round,pad=0.3', edgecolor='gray'), zorder=30)
+
+            # Finale Render-Instanz
+            st.pyplot(fig)
+            
+            # ----------------------------------------------------------------------
+            # BILD-DOWNLOAD GENERATOR
+            # ----------------------------------------------------------------------
+            img_buffer = io.BytesIO()
+            fig.savefig(img_buffer, format='png', bbox_inches='tight', dpi=150)
+            img_buffer.seek(0)
+            
+            col1, col2, col3 = st.columns([1,2,1])
+            with col2:
+                dl_suffix = "LIVE" if "Radar" in sel_model else f"{sel_hour}h"
+                st.download_button(
+                    label="📥 Karte als PNG speichern",
+                    data=img_buffer,
+                    file_name=f"WarnwetterBB_{sel_model.replace(' ', '')}_{sel_param.replace(' ', '_')}_{dl_suffix}.png",
+                    mime="image/png",
+                    use_container_width=True
+                )
+            
+            cleanup_temp_files()
+            
+        except Exception as plot_err:
+            st.error(f"⚠️ Es gab ein Problem beim Zeichnen der Karte: {str(plot_err)}")
+            if debug_mode:
+                st.code(traceback.format_exc())
+            
     else:
         st.error(f"⚠️ Aktuell liefert der gewählte Server keine Daten für '{sel_param}'.")
-        st.info("💡 Wenn das DWD-Radar hakt, schalte im Menü links einfach auf 'RainViewer Echtzeit-Radar' um!")
-
+        st.info("💡 Wenn das DWD-Radar oder ICON-D2 hakt, versuche es in wenigen Minuten noch einmal oder schalte auf 'RainViewer Echtzeit-Radar' um!")
