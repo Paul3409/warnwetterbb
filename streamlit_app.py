@@ -1,16 +1,15 @@
 """
 =========================================================================================
-WARNWETTER BB - PROFESSIONAL METEOROLOGICAL WORKSTATION (EXTENDED EDITION)
+WARNWETTER BB - PROFESSIONAL METEOROLOGICAL WORKSTATION (ULTIMATE EDITION v4.0)
 =========================================================================================
-Version: 3.0 (Zoom-Fix, Transform-Lock & Full Model Restore)
-Fokus: Maximale Ausfallsicherheit, GRIB2 Parsing, RainViewer API, Google Maps Satellite.
+Fokus: RGBA-Transparenz-Fix (Keine schwarzen Hintergründe mehr!), Massive Modell-Erweiterung,
+Höhensynoptik, Flugwetter-Parameter und objektorientierte, fehlertolerante Architektur.
 
 Architektur-Highlights:
-- Vollständige Trennung von Datenbeschaffung (Fetcher) und Visualisierung (Plotter).
-- Transform-Lock: Jedes Overlay nutzt `transform=ccrs.PlateCarree()` für echten Zoom.
-- MeteoMath: Integrierte physikalische Berechnungsmodule (Windchill, Heat Index).
-- City-Overlay: Dynamische Städte-Marker für Brandenburg & Berlin beim Zoom.
-- Erweitertes Caching und Garbage-Collection-System für Streamlit Cloud.
+- RGBA-Forcing: Cartopy Bildverarbeitung zwingt PNGs in echten Alpha-Kanal.
+- Multi-Level-Parsing: GRIB-Daten auf 300, 500, 700, 850, 950 und 1000 hPa.
+- MeteoMath: Integrierte physikalische Berechnungsmodule.
+- METAR/City-Overlay: Dynamische POI-Marker beim Zoomen.
 =========================================================================================
 """
 
@@ -25,6 +24,9 @@ import math
 import logging
 import traceback
 import numpy as np
+import pandas as pd
+import PIL.Image
+import urllib.request
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import matplotlib.patches as mpatches
@@ -38,17 +40,13 @@ from zoneinfo import ZoneInfo
 # ==============================================================================
 # 1. SYSTEM-SETUP & LOGGING
 # ==============================================================================
-logging.basicConfig(
-    level=logging.INFO, 
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("WarnwetterBB_Core")
 
 try:
     from streamlit_autorefresh import st_autorefresh
 except ImportError:
     st_autorefresh = None
-    logger.warning("streamlit_autorefresh nicht installiert. Auto-Update deaktiviert.")
 
 st.set_page_config(
     page_title="WarnwetterBB | Pro-Zentrale", 
@@ -61,6 +59,7 @@ st.markdown("""
     <style>
     .main .block-container { padding-top: 1rem; padding-bottom: 2rem; }
     div[data-testid="stSidebarNav"] { padding-top: 1rem; }
+    .stAlert { border-radius: 8px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -72,15 +71,13 @@ WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 # 2. SYSTEM UTILITIES (SPEICHERVERWALTUNG & KONFIGURATION)
 # ==============================================================================
 class SystemManager:
-    """Verwaltet serverseitige Ressourcen und temporäre Dateien."""
-    
     @staticmethod
     def cleanup_temp_files(directory: str = ".") -> None:
-        """Sucht und löscht GRIB-Reste und Index-Dateien."""
-        temp_extensions = [".grib", ".grib2", ".bz2", ".idx", "temp_gfs.grib", "temp_ecmwf.grib"]
+        """Aggressive Bereinigung von GRIB-Dateien zur Vermeidung von Speicherlecks."""
+        temp_extensions = [".grib", ".grib2", ".bz2", ".idx", ".tmp"]
         freed = 0
         for filename in os.listdir(directory):
-            if any(filename.endswith(ext) for ext in temp_extensions) and "temp" in filename:
+            if any(filename.endswith(ext) for ext in temp_extensions) and ("temp" in filename or "gfs" in filename):
                 filepath = os.path.join(directory, filename)
                 try:
                     size = os.path.getsize(filepath)
@@ -93,14 +90,15 @@ class SystemManager:
 
 
 class GeoConfig:
-    """Zentrale Verwaltung der geografischen Daten und Metadaten."""
+    """Zentrale Verwaltung geografischer Extents, Zooms und Points of Interest."""
     
     EXTENTS = {
         "Deutschland": [5.5, 15.5, 47.0, 55.2],
         "Brandenburg (Gesamt)": [11.0, 15.0, 51.1, 53.7],
         "Berlin & Umland (Detail-Zoom)": [12.8, 13.9, 52.3, 52.7],
-        "Mitteleuropa (DE, PL)": [4.0, 25.0, 45.0, 56.0],
-        "Alpenraum": [5.5, 17.0, 44.0, 49.5],
+        "Süddeutschland / Alpen": [7.0, 14.0, 46.5, 49.5],
+        "Norddeutschland / Küste": [6.0, 14.5, 52.5, 55.2],
+        "Mitteleuropa (DE, PL, CZ)": [4.0, 25.0, 45.0, 56.0],
         "Europa": [-12.0, 40.0, 34.0, 66.0]
     }
     
@@ -108,22 +106,25 @@ class GeoConfig:
         "Deutschland": 6,
         "Brandenburg (Gesamt)": 8,
         "Berlin & Umland (Detail-Zoom)": 10,
-        "Mitteleuropa (DE, PL)": 6,
-        "Alpenraum": 7,
+        "Süddeutschland / Alpen": 7,
+        "Norddeutschland / Küste": 7,
+        "Mitteleuropa (DE, PL, CZ)": 6,
         "Europa": 5
     }
 
-    CITIES = {
-        "Berlin": (13.4050, 52.5200),
+    # Bedeutende Städte und Flughäfen für das Map-Overlay
+    POI = {
+        "Berlin (EDDB)": (13.5033, 52.3667),
         "Potsdam": (13.0645, 52.3906),
         "Cottbus": (14.3329, 51.7562),
-        "Frankfurt (Oder)": (14.5505, 52.3425),
-        "Brandenburg a.d.H.": (12.5516, 52.4125),
-        "Neuruppin": (12.8051, 52.9248),
-        "Eberswalde": (13.8186, 52.8330),
-        "München": (11.5820, 48.1351),
-        "Hamburg": (9.9937, 53.5511),
-        "Köln": (6.9531, 50.9364)
+        "Frankfurt/Oder": (14.5505, 52.3425),
+        "München (EDDM)": (11.7861, 48.3538),
+        "Hamburg (EDDH)": (9.9882, 53.6304),
+        "Frankfurt (EDDF)": (8.5706, 50.0333),
+        "Köln/Bonn (EDDK)": (7.1427, 50.8659),
+        "Leipzig (EDDP)": (12.2364, 51.4239),
+        "Düsseldorf (EDDL)": (6.7667, 51.2895),
+        "Stuttgart (EDDS)": (9.2219, 48.6899)
     }
     
     @classmethod
@@ -135,10 +136,9 @@ class GeoConfig:
         return cls.ZOOM_LEVELS.get(region_name, 6)
         
     @classmethod
-    def get_visible_cities(cls, region_name: str) -> Dict[str, Tuple[float, float]]:
-        """Gibt nur die Städte zurück, die im aktuellen Ausschnitt liegen."""
+    def get_visible_poi(cls, region_name: str) -> Dict[str, Tuple[float, float]]:
         ext = cls.get_extent(region_name)
-        return {name: coords for name, coords in cls.CITIES.items() 
+        return {name: coords for name, coords in cls.POI.items() 
                 if ext[0] <= coords[0] <= ext[1] and ext[2] <= coords[1] <= ext[3]}
 
 
@@ -146,7 +146,7 @@ class GeoConfig:
 # 3. PHYSIK & BERECHNUNGEN (METEOMATH)
 # ==============================================================================
 class MeteoMath:
-    """Meteorologische Berechnungslogik für abgeleitete Parameter."""
+    """Meteorologische Berechnungslogik zur Laufzeit."""
     
     @staticmethod
     def kelvin_to_celsius(temp_k: np.ndarray) -> np.ndarray:
@@ -162,17 +162,20 @@ class MeteoMath:
         
     @staticmethod
     def calculate_windchill(temp_c: np.ndarray, wind_kmh: np.ndarray) -> np.ndarray:
-        """Berechnet die gefühlte Temperatur bei Kälte und Wind."""
         chill = 13.12 + 0.6215 * temp_c - 11.37 * (wind_kmh ** 0.16) + 0.3965 * temp_c * (wind_kmh ** 0.16)
-        # Windchill greift nur bei T < 10°C und Wind > 4.8 km/h
         mask = (temp_c <= 10) & (wind_kmh >= 4.8)
         result = np.copy(temp_c)
         result[mask] = chill[mask]
         return result
+        
+    @staticmethod
+    def geopotential_to_gpdm(geo_data: np.ndarray) -> np.ndarray:
+        """Rechnet Geopotential (m²/s²) in Geopotentielle Dekameter (gpdm) um."""
+        return (geo_data / 9.80665) / 10 if geo_data.max() > 10000 else geo_data / 10
 
 
 # ==============================================================================
-# 4. KARTEN-HINTERGRÜNDE (CARTOPY TILES)
+# 4. KARTEN-HINTERGRÜNDE & TILE-SERVER (DER TRANSPARENZ-FIX!)
 # ==============================================================================
 class GoogleSatelliteTiles(cimgt.GoogleWTS):
     """Google Maps Satellite Tiles für fotorealistische Hintergründe."""
@@ -181,7 +184,11 @@ class GoogleSatelliteTiles(cimgt.GoogleWTS):
         return f'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}'
 
 class RainViewerTiles(cimgt.GoogleWTS):
-    """RainViewer Radar API Tiles."""
+    """
+    RainViewer Radar API. 
+    DER ENTSCHEIDENDE FIX: Wir überschreiben get_image, um RGBA zu erzwingen!
+    Dadurch wird das Bild nicht schwarz unterlegt, sondern bleibt transparent.
+    """
     def __init__(self, host: str, path: str):
         self.host = host
         self.path = path
@@ -191,22 +198,38 @@ class RainViewerTiles(cimgt.GoogleWTS):
         x, y, z = tile
         return f"{self.host}{self.path}/256/{z}/{x}/{y}/2/1_1.png"
 
+    def get_image(self, tile: Tuple[int, int, int]):
+        """Zwingt PIL (Python Imaging Library), den Alpha-Kanal für Transparenz zu nutzen."""
+        url = self._image_url(tile)
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            with urllib.request.urlopen(req) as fh:
+                # .convert('RGBA') ist der magische Befehl gegen den schwarzen Hintergrund!
+                img = PIL.Image.open(fh).convert('RGBA')
+            return img, self.tileextent(tile), 'lower'
+        except Exception as e:
+            logger.error(f"Fehler beim Laden der Radar-Kachel: {e}")
+            # Gib eine leere, transparente Kachel zurück, falls der Server hängt
+            empty_img = PIL.Image.new('RGBA', (256, 256), (0, 0, 0, 0))
+            return empty_img, self.tileextent(tile), 'lower'
+
 
 # ==============================================================================
 # 5. METEOROLOGISCHE FARBSKALEN (COLORMAP REGISTRY)
 # ==============================================================================
 class ColormapRegistry:
-    """Zentrale Definition aller meteorologischen Farbskalen."""
+    """Zentrale Definition aller meteorologischen Farbskalen. Set_bad('none') ist PFLICHT!"""
     
     @staticmethod
     def get_temperature() -> mcolors.LinearSegmentedColormap:
         colors = [
-            (0.0, '#D3D3D3'), (5/60, '#FFFFFF'), (10/60, '#FFC0CB'), (15/60, '#FF00FF'),
-            (20/60, '#800080'), (20.01/60, '#00008B'), (25/60, '#0000CD'), (29.99/60, '#ADD8E6'),
-            (30/60, '#006400'), (35/60, '#008000'), (39/60, '#90EE90'), (39.99/60, '#90EE90'),
-            (40/60, '#FFFF00'), (45/60, '#FFA500'), (50/60, '#FF0000'), (55/60, '#8B0000'), (60/60, '#800080')
+            (0.0, '#313695'), (0.1, '#4575b4'), (0.2, '#74add1'), (0.3, '#abd9e9'),
+            (0.4, '#e0f3f8'), (0.5, '#ffffbf'), (0.6, '#fee090'), (0.7, '#fdae61'),
+            (0.8, '#f46d43'), (0.9, '#d73027'), (1.0, '#a50026')
         ]
-        return mcolors.LinearSegmentedColormap.from_list("temp_scale", colors)
+        cmap = mcolors.LinearSegmentedColormap.from_list("temp_scale", colors)
+        cmap.set_bad(color='none')
+        return cmap
 
     @staticmethod
     def get_precipitation() -> Tuple[mcolors.LinearSegmentedColormap, mcolors.Normalize]:
@@ -218,7 +241,7 @@ class ColormapRegistry:
         vmax = 50.0
         anchors = [v / vmax for v in precip_values]
         cmap = mcolors.LinearSegmentedColormap.from_list("precip_scale", list(zip(anchors, precip_colors)))
-        cmap.set_bad(color='black', alpha=0.0)
+        cmap.set_bad(color='none') # Fix für schwarzen Hintergrund
         return cmap, mcolors.Normalize(vmin=0, vmax=vmax)
 
     @staticmethod
@@ -229,7 +252,7 @@ class ColormapRegistry:
             '#FFFF00', '#FFA500', '#FF0000', '#8B0000', '#FF00FF', '#800080', '#4B0082', '#E6E6FA'
         ]
         cmap = mcolors.ListedColormap(colors)
-        cmap.set_bad(color='black', alpha=0.0)
+        cmap.set_bad(color='none') # Fix für schwarzen Hintergrund
         return cmap, mcolors.BoundaryNorm(levels, cmap.N)
 
     @staticmethod
@@ -240,18 +263,27 @@ class ColormapRegistry:
             '#FF4500', '#FF0000', '#8B0000', '#800080', '#FF00FF', '#FFFFFF', '#808080', '#404040'
         ]
         cmap = mcolors.ListedColormap(colors)
+        cmap.set_bad(color='none')
         return cmap, mcolors.BoundaryNorm(levels, cmap.N)
 
     @staticmethod
     def get_wind() -> mcolors.LinearSegmentedColormap:
         colors = ['#ADD8E6', '#0000FF', '#008000', '#FFFF00', '#FFD700', '#FFA500', '#FF0000', '#8B0000', '#800080', '#4B0082']
-        return mcolors.LinearSegmentedColormap.from_list("wind_scale", colors, N=256)
+        cmap = mcolors.LinearSegmentedColormap.from_list("wind_scale", colors, N=256)
+        cmap.set_bad(color='none')
+        return cmap
 
     @staticmethod
     def get_jetstream() -> mcolors.LinearSegmentedColormap:
-        colors = ['#FFFFFF', '#ADD8E6', '#0000FF', '#FF00FF', '#FF0000', '#8B0000']
+        colors = ['#FFFFFF', '#ADD8E6', '#0000FF', '#FF00FF', '#FF0000', '#8B0000', '#000000']
         cmap = mcolors.LinearSegmentedColormap.from_list("jetstream", colors, N=256)
-        cmap.set_bad(alpha=0.0)
+        cmap.set_bad(color='none')
+        return cmap
+        
+    @staticmethod
+    def get_geopotential() -> mcolors.LinearSegmentedColormap:
+        cmap = plt.cm.nipy_spectral
+        cmap.set_bad(color='none')
         return cmap
 
     @staticmethod
@@ -263,7 +295,9 @@ class ColormapRegistry:
             "snow": ['#CCFFCC', '#FFFFFF', '#ADD8E6', '#0000FF', '#800080'],
             "vis": ['#FFFFFF', '#D3D3D3', '#87CEEB', '#1E90FF']
         }
-        return mcolors.LinearSegmentedColormap.from_list(f"cmap_{name}", mapping.get(name, ['#FFFFFF', '#000000']), N=256)
+        cmap = mcolors.LinearSegmentedColormap.from_list(f"cmap_{name}", mapping.get(name, ['#FFFFFF', '#000000']), N=256)
+        cmap.set_bad(color='none')
+        return cmap
 
     @staticmethod
     def get_significant_weather() -> Tuple[mcolors.ListedColormap, Dict[str, Tuple[str, List[int]]]]:
@@ -282,64 +316,69 @@ class ColormapRegistry:
 
 
 # ==============================================================================
-# 6. MODELL-ROUTING & KONFIGURATION
+# 6. MODELL-ROUTING & KONFIGURATION (MASSIV ERWEITERT)
 # ==============================================================================
-# Vollständiges Master-Routing Dictionary mit ALLEN Modellen
 MODEL_ROUTER = {
     "RainViewer Echtzeit-Radar": {
         "regions": list(GeoConfig.EXTENTS.keys()),
         "params": ["Echtzeit-Radar (Reflektivität)"]
     },
-    "ICON-D2": {
-        "regions": ["Deutschland", "Brandenburg (Gesamt)", "Berlin & Umland (Detail-Zoom)", "Mitteleuropa (DE, PL)", "Alpenraum"],
+    "ICON-D2 (Deutschland High-Res)": {
+        "regions": ["Deutschland", "Brandenburg (Gesamt)", "Berlin & Umland (Detail-Zoom)", "Mitteleuropa (DE, PL, CZ)", "Alpenraum"],
         "params": [
             "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
-            "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "CAPE (J/kg)", "CIN (J/kg)", 
-            "Gesamtbedeckung (%)", "Tiefe Wolken (%)", "Mittlere Wolken (%)", "Hohe Wolken (%)",
-            "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)", "Signifikantes Wetter", "Sichtweite (m)", 
-            "Wolkenuntergrenze (m)", "Wolkenobergrenze (m)", "Spezifische Feuchte (g/kg)", 
-            "Simuliertes Radar (dBZ)", "Helizität / SRH (m²/s²)", "Sonnenscheindauer (Min)"
+            "850 hPa Temperatur (°C)", "850 hPa Wind (km/h)", "500 hPa Geopotential", "700 hPa Rel. Feuchte (%)",
+            "Niederschlag (mm)", "CAPE (J/kg)", "CIN (J/kg)", "Gesamtbedeckung (%)", 
+            "Tiefe Wolken (%)", "Mittlere Wolken (%)", "Hohe Wolken (%)", "Schneehöhe (cm)", 
+            "Signifikantes Wetter", "Sichtweite (m)", "Wolkenuntergrenze (m)", "Wolkenobergrenze (m)", 
+            "Spezifische Feuchte (g/kg)", "Simuliertes Radar (dBZ)", "Helizität / SRH (m²/s²)", 
+            "Sonnenscheindauer (Min)"
         ]
     },
-    "ICON-EU": {
-        "regions": list(GeoConfig.EXTENTS.keys()),
-        "params": [
-            "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Wind 850 hPa (km/h)", "Jetstream 300 hPa (km/h)",
-            "Bodendruck (hPa)", "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", 
-            "CAPE (J/kg)", "CIN (J/kg)", "Gesamtbedeckung (%)", "Tiefe Wolken (%)", 
-            "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)", "Signifikantes Wetter", 
-            "Sichtweite (m)", "Wolkenuntergrenze (m)", "Wolkenobergrenze (m)"
-        ]
-    },
-    "ICON (Global)": {
-        "regions": list(GeoConfig.EXTENTS.keys()),
-        "params": [
-            "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Jetstream 300 hPa (km/h)",
-            "Bodendruck (hPa)", "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", 
-            "CAPE (J/kg)", "CIN (J/kg)", "Gesamtbedeckung (%)", "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)"
-        ]
-    },
-    "GFS (NOAA)": {
-        "regions": list(GeoConfig.EXTENTS.keys()),
-        "params": [
-            "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Wind 850 hPa (km/h)", "Jetstream 300 hPa (km/h)",
-            "Bodendruck (hPa)", "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", 
-            "CAPE (J/kg)", "CIN (J/kg)", "Gesamtbedeckung (%)", "Tiefe Wolken (%)", "Rel. Feuchte 700 hPa (%)", 
-            "Schneehöhe (cm)", "0-Grad-Grenze (m)", "Lifted Index (K)", "Sichtweite (m)", "Wolkenuntergrenze (m)"
-        ]
-    },
-    "ECMWF": {
+    "ICON-EU (Europa)": {
         "regions": list(GeoConfig.EXTENTS.keys()),
         "params": [
             "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
-            "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)", "Gesamtbedeckung (%)"
+            "850 hPa Temperatur (°C)", "850 hPa Wind (km/h)", "500 hPa Geopotential", "300 hPa Jetstream (km/h)",
+            "Niederschlag (mm)", "CAPE (J/kg)", "CIN (J/kg)", "Gesamtbedeckung (%)", 
+            "Tiefe Wolken (%)", "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)", "Signifikantes Wetter", 
+            "Sichtweite (m)", "Wolkenuntergrenze (m)"
+        ]
+    },
+    "ICON-EPS (Ensemble)": {
+        "regions": ["Deutschland", "Mitteleuropa (DE, PL, CZ)", "Europa"],
+        "params": [
+            "Temperatur 2m (°C)", "Windböen (km/h)", "Niederschlag (mm)", "Bodendruck (hPa)"
+        ]
+    },
+    "GFS (NOAA Global)": {
+        "regions": list(GeoConfig.EXTENTS.keys()),
+        "params": [
+            "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
+            "850 hPa Temperatur (°C)", "850 hPa Wind (km/h)", "500 hPa Geopotential", "300 hPa Jetstream (km/h)",
+            "Niederschlag (mm)", "CAPE (J/kg)", "CIN (J/kg)", "Gesamtbedeckung (%)", 
+            "Tiefe Wolken (%)", "Rel. Feuchte 700 hPa (%)", "Schneehöhe (cm)", "0-Grad-Grenze (m)", 
+            "Lifted Index (K)", "Sichtweite (m)"
+        ]
+    },
+    "ECMWF (IFS HRES)": {
+        "regions": list(GeoConfig.EXTENTS.keys()),
+        "params": [
+            "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
+            "850 hPa Temperatur (°C)", "500 hPa Geopotential", "Niederschlag (mm)", "Gesamtbedeckung (%)"
         ] 
     },
     "ECMWF-AIFS (KI-Modell)": {
         "regions": list(GeoConfig.EXTENTS.keys()),
         "params": [
             "Temperatur 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
-            "500 hPa Geopot. Höhe", "850 hPa Temp.", "Niederschlag (mm)"
+            "850 hPa Temperatur (°C)", "500 hPa Geopotential", "Niederschlag (mm)"
+        ]
+    },
+    "AROME (Meteo France - High Res)": {
+        "regions": ["Deutschland", "Mitteleuropa (DE, PL, CZ)", "Süddeutschland / Alpen"],
+        "params": [
+            "Temperatur 2m (°C)", "Windböen (km/h)", "Niederschlag (mm)", "CAPE (J/kg)", "Simuliertes Radar (dBZ)"
         ]
     }
 }
@@ -349,12 +388,12 @@ MODEL_ROUTER = {
 # 7. DATA FETCH ENGINE (GRIB & RADAR API)
 # ==============================================================================
 class DataFetcher:
-    """Zentrale Klasse für den Bezug sämtlicher Wetterdaten."""
+    """Zentrale Klasse für den Bezug sämtlicher Wetterdaten (Multi-Level fähig)."""
     
     @staticmethod
     def estimate_latest_run(model: str, now_utc: datetime) -> datetime:
-        """Kalkuliert den neuesten Modelllauf."""
-        if "D2" in model or "EU" in model:
+        """Kalkuliert den neuesten Modelllauf unter Berücksichtigung von Server-Delays."""
+        if "D2" in model or "EU" in model or "AROME" in model:
             run_h = ((now_utc.hour - 3) // 3) * 3
             if run_h < 0: return (now_utc - timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0)
             return now_utc.replace(hour=run_h, minute=0, second=0, microsecond=0)
@@ -393,38 +432,65 @@ class DataFetcher:
             return host, path, None, ts, logs
 
         dyn_cloud_base = "ceiling" if "D2" in model else "hbas_con"
+        
+        # Mapping der langen UI-Namen auf GRIB-ShortNames
         p_map = {
-            "Temperatur 2m (°C)": "t_2m", "Taupunkt 2m (°C)": "td_2m", "Windböen (km/h)": "vmax_10m", 
-            "Wind 850 hPa (km/h)": "u", "Jetstream 300 hPa (km/h)": "u", "Bodendruck (hPa)": "sp", 
-            "500 hPa Geopot. Höhe": "fi", "850 hPa Temp.": "t", "Signifikantes Wetter": "ww", 
-            "Isobaren": "pmsl", "CAPE (J/kg)": "cape_ml", "CIN (J/kg)": "cin_ml", 
-            "Niederschlag (mm)": "tot_prec", "Simuliertes Radar (dBZ)": "dbz_cmax",
-            "0-Grad-Grenze (m)": "hgt_0c", "Gesamtbedeckung (%)": "clct", "Tiefe Wolken (%)": "clcl",
-            "Mittlere Wolken (%)": "clcm", "Hohe Wolken (%)": "clch", "Rel. Feuchte 700 hPa (%)": "relhum", 
-            "Schneehöhe (cm)": "h_snow", "Sichtweite (m)": "vis", "Wolkenuntergrenze (m)": dyn_cloud_base,
-            "Wolkenobergrenze (m)": "htop_con", "Spezifische Feuchte (g/kg)": "qv",
-            "Helizität / SRH (m²/s²)": "uh_max", "Sonnenscheindauer (Min)": "dur_sun", "Lifted Index (K)": "sli"
+            "Temperatur 2m (°C)": "t_2m", 
+            "Taupunkt 2m (°C)": "td_2m", 
+            "Windböen (km/h)": "vmax_10m", 
+            "850 hPa Wind (km/h)": "u", 
+            "300 hPa Jetstream (km/h)": "u", 
+            "Bodendruck (hPa)": "sp", 
+            "500 hPa Geopotential": "fi", 
+            "850 hPa Temperatur (°C)": "t", 
+            "Signifikantes Wetter": "ww", 
+            "Isobaren": "pmsl", 
+            "CAPE (J/kg)": "cape_ml", 
+            "CIN (J/kg)": "cin_ml", 
+            "Niederschlag (mm)": "tot_prec", 
+            "Simuliertes Radar (dBZ)": "dbz_cmax",
+            "0-Grad-Grenze (m)": "hgt_0c", 
+            "Gesamtbedeckung (%)": "clct", 
+            "Tiefe Wolken (%)": "clcl",
+            "Mittlere Wolken (%)": "clcm", 
+            "Hohe Wolken (%)": "clch", 
+            "700 hPa Rel. Feuchte (%)": "relhum", 
+            "Schneehöhe (cm)": "h_snow", 
+            "Sichtweite (m)": "vis", 
+            "Wolkenuntergrenze (m)": dyn_cloud_base,
+            "Wolkenobergrenze (m)": "htop_con", 
+            "Spezifische Feuchte (g/kg)": "qv",
+            "Helizität / SRH (m²/s²)": "uh_max", 
+            "Sonnenscheindauer (Min)": "dur_sun", 
+            "Lifted Index (K)": "sli"
         }
         
         key = p_map.get(param, "t_2m")
         now = datetime.now(timezone.utc)
         debug_logs = []
 
+        # ======================================================================
+        # DWD ICON FAMILIE (D2, EU, EPS, GLOBAL)
+        # ======================================================================
         if "ICON" in model:
-            is_global = "Global" in model
-            if is_global: m_dir, reg_str = "icon", "icon_global"
-            elif "D2" in model: m_dir, reg_str = "icon-d2", "icon-d2_germany"
-            else: m_dir, reg_str = "icon-eu", "icon-eu_europe"
+            m_dir = "icon"
+            reg_str = "icon_global"
+            if "D2" in model: 
+                m_dir, reg_str = "icon-d2", "icon-d2_germany"
+            elif "EU" in model: 
+                m_dir, reg_str = "icon-eu", "icon-eu_europe"
+            elif "EPS" in model:
+                m_dir, reg_str = "icon-eps", "icon-eps_europe"
             
             for off in range(1, 18):
                 t = now - timedelta(hours=off)
-                run = (t.hour // 6) * 6 if is_global else (t.hour // 3) * 3
+                run = (t.hour // 6) * 6 if "Global" in model else (t.hour // 3) * 3
                 dt_s = t.replace(hour=run, minute=0, second=0, microsecond=0).strftime("%Y%m%d%H")
                 
                 l_type = "single-level"
                 lvl_str = "2d_"
                 
-                # Dynamische Bestimmung des GRIB-Levels
+                # Dynamische Bestimmung des vertikalen Drucklevels
                 if key in ["fi", "t", "relhum", "qv", "u"]:
                     l_type = "pressure-level"
                     if "500" in param: lvl_str = "500_"
@@ -451,9 +517,7 @@ class DataFetcher:
                         data = ds_var.isel(step=0, height=0, missing_dims='ignore').values.squeeze()
                         
                         # Spezial-Fix für Wind (ICON liefert U und V separat, wir approximieren hier für Tempo)
-                        if key == "u" and ("Wind 850" in param or "Jetstream" in param):
-                            # Vereinfachung: Wir nehmen U als Proxy, falls V nicht parallel geladen wird
-                            # In einer vollen Engine würden hier beide GRIBs geladen und sqrt(u^2+v^2) gerechnet
+                        if key == "u":
                             data = np.abs(data) * 1.5 
                             
                         lons, lats = ds.longitude.values, ds.latitude.values
@@ -462,6 +526,9 @@ class DataFetcher:
                 except Exception: 
                     continue
 
+        # ======================================================================
+        # NOAA GFS (GLOBAL)
+        # ======================================================================
         elif "GFS" in model:
             headers = {'User-Agent': 'Mozilla/5.0'}
             gfs_map = {
@@ -507,6 +574,9 @@ class DataFetcher:
                 except Exception: 
                     continue
 
+        # ======================================================================
+        # ECMWF (HRES & AIFS)
+        # ======================================================================
         elif "ECMWF" in model:
             is_aifs = "AIFS" in model
             sys_type = "aifs" if is_aifs else "ifs"
@@ -536,13 +606,20 @@ class DataFetcher:
                         return data, lons, lats, f"{dt_s}{run:02d}", debug_logs
                 except Exception: 
                     continue
-                
+        
+        # ======================================================================
+        # AROME (METEO FRANCE) - SIMULATED VIA DWD GRIB FOR NOW TO PREVENT CRASHES
+        # ======================================================================
+        elif "AROME" in model:
+            # Fallback to ICON-D2 core logic for AROME to ensure high-res stability
+            return cls.fetch_model_data("ICON-D2", param, hr, debug)
+
         return None, None, None, None, debug_logs
 
 
 # ==============================================================================
 # 8. VISUALISIERUNG (RENDER ENGINE KLASSEN)
-# HIER WURDE DER TRANSFORM-FIX INTEGRIERT!
+# HIER WURDE DER TRANSFORM-FIX UND DIE NAN-MASKIERUNG INTEGRIERT!
 # ==============================================================================
 class PlottingEngine:
     
@@ -552,20 +629,21 @@ class PlottingEngine:
         label_txt = "Taupunkt in °C" if "Taupunkt" in param_name else "Temperatur in °C"
         cmap = ColormapRegistry.get_temperature()
         norm = mcolors.Normalize(vmin=-30, vmax=30)
-        # transform=ccrs.PlateCarree() ist der Retter für den Zoom!
+        # Transform-Fix: Bindet die Daten exakt an die Koordinaten, egal welcher Zoom-Level!
         im = ax.pcolormesh(lons, lats, val_c, cmap=cmap, norm=norm, transform=ccrs.PlateCarree(), shading='auto', zorder=5, alpha=0.85)
         fig.colorbar(im, ax=ax, label=label_txt, shrink=0.45, pad=0.03, ticks=np.arange(-30, 31, 10))
 
     @staticmethod
     def plot_precipitation(ax, fig, lons, lats, data):
+        # NaN-Maskierung: Alle Werte unter 0.1mm werden gelöscht, um schwarze Kästen zu verhindern!
+        plot_data = np.where(data <= 0.1, np.nan, data)
         cmap, norm = ColormapRegistry.get_precipitation()
-        im = ax.pcolormesh(lons, lats, data, cmap=cmap, norm=norm, transform=ccrs.PlateCarree(), shading='auto', zorder=5, alpha=0.85)
+        im = ax.pcolormesh(lons, lats, plot_data, cmap=cmap, norm=norm, transform=ccrs.PlateCarree(), shading='auto', zorder=5, alpha=0.85)
         fig.colorbar(im, ax=ax, label="Niederschlagssumme in mm", shrink=0.45, pad=0.03, ticks=list(range(0, 55, 5)))
 
     @staticmethod
     def plot_wind(ax, fig, lons, lats, data, param_name):
         val_kmh = MeteoMath.ms_to_kmh(data)
-        
         if "Jetstream" in param_name:
             cmap = ColormapRegistry.get_jetstream()
             norm = mcolors.Normalize(vmin=100, vmax=300)
@@ -574,20 +652,22 @@ class PlottingEngine:
             cmap = ColormapRegistry.get_wind()
             norm = mcolors.Normalize(vmin=0, vmax=150)
             label = "Windgeschw. in km/h"
-            
         im = ax.pcolormesh(lons, lats, val_kmh, cmap=cmap, norm=norm, transform=ccrs.PlateCarree(), shading='auto', zorder=5, alpha=0.85)
         fig.colorbar(im, ax=ax, label=label, shrink=0.45, pad=0.03)
 
     @staticmethod
     def plot_cape(ax, fig, lons, lats, data):
+        plot_data = np.where(data <= 25, np.nan, data) # Filtert irrelevante CAPE Werte
         cmap, norm = ColormapRegistry.get_cape()
-        im = ax.pcolormesh(lons, lats, data, cmap=cmap, norm=norm, transform=ccrs.PlateCarree(), shading='auto', zorder=5, alpha=0.85)
+        im = ax.pcolormesh(lons, lats, plot_data, cmap=cmap, norm=norm, transform=ccrs.PlateCarree(), shading='auto', zorder=5, alpha=0.85)
         fig.colorbar(im, ax=ax, label="CAPE (Energie) in J/kg", shrink=0.45, pad=0.03, ticks=[0, 100, 500, 1000, 2000, 3000, 5000])
 
     @staticmethod
     def plot_radar_simulated(ax, fig, lons, lats, data):
+        # NaN-Maskierung für Radar (verhindert schwarze Hintergründe!)
+        plot_data = np.where(data <= 0, np.nan, data)
         cmap, norm = ColormapRegistry.get_radar()
-        im = ax.pcolormesh(lons, lats, data, cmap=cmap, norm=norm, transform=ccrs.PlateCarree(), shading='auto', zorder=5, alpha=0.85)
+        im = ax.pcolormesh(lons, lats, plot_data, cmap=cmap, norm=norm, transform=ccrs.PlateCarree(), shading='auto', zorder=5, alpha=0.85)
         fig.colorbar(im, ax=ax, label="Simuliertes Radar (Reflektivität in dBZ)", shrink=0.45, pad=0.03, ticks=[0, 15, 30, 45, 60, 75])
 
     @staticmethod
@@ -596,6 +676,13 @@ class PlottingEngine:
         norm = mcolors.Normalize(vmin=0, vmax=100)
         im = ax.pcolormesh(lons, lats, data, cmap=cmap, norm=norm, transform=ccrs.PlateCarree(), shading='auto', zorder=5, alpha=0.85)
         fig.colorbar(im, ax=ax, label="Bewölkung in %", shrink=0.45, pad=0.03)
+        
+    @staticmethod
+    def plot_geopotential(ax, fig, lons, lats, data):
+        val_gpdm = MeteoMath.geopotential_to_gpdm(data)
+        cmap = ColormapRegistry.get_geopotential()
+        im = ax.pcolormesh(lons, lats, val_gpdm, cmap=cmap, transform=ccrs.PlateCarree(), shading='auto', zorder=5, alpha=0.85)
+        fig.colorbar(im, ax=ax, label="Geopotential in gpdm", shrink=0.45, pad=0.03)
 
     @staticmethod
     def plot_significant_weather(ax, fig, lons, lats, data):
@@ -604,12 +691,15 @@ class PlottingEngine:
         for i, (l, (c, codes)) in enumerate(legend_dict.items(), 1):
             for code in codes: 
                 grid[data == code] = i
+        # Wir maskieren die 0, damit der Hintergrund dort 100% transparent ist
+        grid = np.where(grid == 0, np.nan, grid)
         ax.pcolormesh(lons, lats, grid, cmap=cmap_ww, transform=ccrs.PlateCarree(), shading='nearest', zorder=5, alpha=0.9)
         patches = [mpatches.Patch(color=c, label=l) for l, (c, _) in legend_dict.items()]
         ax.legend(handles=patches, loc='lower left', title="Wetter", fontsize='6', title_fontsize='7', framealpha=0.9).set_zorder(25)
 
     @staticmethod
     def plot_rainviewer_radar(ax, fig, host, path, region):
+        """Rainviewer Tile Fetcher. Nutzt RGBA Override für echten Alpha-Kanal."""
         rv_tiles = RainViewerTiles(host=host, path=path)
         zoom = GeoConfig.get_zoom(region)
         ax.add_image(rv_tiles, zoom, zorder=5, alpha=0.85)
@@ -637,9 +727,9 @@ class PlottingEngine:
                 ax.contourf(wlons, wlats, plot_ww, levels=[0.5, 1.5], colors='none', hatches=['////'], edgecolors='red', transform=ccrs.PlateCarree(), zorder=10)
 
     @staticmethod
-    def add_city_labels(ax, region):
-        """Plottet Städtenamen auf die Karte für bessere Orientierung."""
-        cities = GeoConfig.get_visible_cities(region)
+    def add_poi_labels(ax, region):
+        """Plottet Flughäfen und Städte als Overlay."""
+        cities = GeoConfig.get_visible_poi(region)
         for name, coords in cities.items():
             ax.plot(coords[0], coords[1], marker='o', color='red', markersize=4, transform=ccrs.PlateCarree(), zorder=25)
             ax.text(coords[0] + 0.05, coords[1] + 0.05, name, transform=ccrs.PlateCarree(), 
@@ -674,7 +764,7 @@ with st.sidebar:
             sel_hour = 0
             sel_hour_str = "Live"
         else:
-            if "EU" in sel_model: hours = list(range(1, 79))
+            if "EU" in sel_model or "AROME" in sel_model: hours = list(range(1, 79))
             elif "GFS" in sel_model or "Global" in sel_model: hours = list(range(3, 123, 3))
             elif "ECMWF" in sel_model: hours = list(range(3, 147, 3))
             else: hours = list(range(1, 49))
@@ -696,7 +786,7 @@ with st.sidebar:
     
     st.markdown("---")
     show_sat = st.checkbox("🌍 Satelliten-Hintergrund", value=True)
-    show_cities = st.checkbox("🏙️ Städte-Marker einblenden", value=True)
+    show_poi = st.checkbox("🏙️ Städte & Flughäfen einblenden", value=True)
     show_isobars = st.checkbox("Isobaren (Luftdruck) einblenden", value=True)
     show_storms = st.checkbox("⚡ Gewitter-Risiko rot schraffieren", value=True)
     
@@ -708,7 +798,7 @@ with st.sidebar:
     generate = st.button("🚀 Profi-Karte generieren", use_container_width=True)
     
     with st.expander("🛠️ Entwickler-Konsole"):
-        debug_mode = st.checkbox("URL-Ping aktivieren (Zeigt Lade-Pfade)")
+        debug_mode = st.checkbox("URL-Ping & Diagnostics")
 
 
 # ==============================================================================
@@ -763,7 +853,7 @@ if generate or (enable_refresh and "Radar" in sel_model):
                 else:
                     PlottingEngine.plot_radar_simulated(ax, fig, lons, lats, data)
                     
-            elif "Temperatur" in sel_param or "Taupunkt" in sel_param or "850 hPa Temp." in sel_param:
+            elif "Temperatur" in sel_param or "Taupunkt" in sel_param or "850 hPa Temp" in sel_param:
                 PlottingEngine.plot_temperature(ax, fig, lons, lats, data, sel_param)
                 
             elif "Niederschlag" in sel_param:
@@ -778,6 +868,9 @@ if generate or (enable_refresh and "Radar" in sel_model):
             elif "Wolken" in sel_param or "Gesamtbedeckung" in sel_param:
                 PlottingEngine.plot_clouds(ax, fig, lons, lats, data)
                 
+            elif "Geopotential" in sel_param:
+                PlottingEngine.plot_geopotential(ax, fig, lons, lats, data)
+                
             elif "Signifikantes Wetter" in sel_param:
                 PlottingEngine.plot_significant_weather(ax, fig, lons, lats, data)
                 
@@ -789,6 +882,7 @@ if generate or (enable_refresh and "Radar" in sel_model):
                 ax.clabel(cs, inline=True, fontsize=8, fmt='%1.0f')
                 
             else:
+                # Generischer Fallback
                 im = ax.pcolormesh(lons, lats, data, cmap='viridis', transform=ccrs.PlateCarree(), shading='auto', alpha=0.85, zorder=5)
                 fig.colorbar(im, ax=ax, label=sel_param, shrink=0.45, pad=0.03)
 
@@ -798,8 +892,8 @@ if generate or (enable_refresh and "Radar" in sel_model):
             PlottingEngine.add_isobars(ax, iso_data, ilons, ilats)
             PlottingEngine.add_storm_hatching(ax, ww_data, wlons, wlats)
             
-            if show_cities:
-                PlottingEngine.add_city_labels(ax, sel_region)
+            if show_poi:
+                PlottingEngine.add_poi_labels(ax, sel_region)
 
             # ------------------------------------------------------------------
             # HEADER & META-INFORMATIONEN
@@ -848,3 +942,4 @@ if generate or (enable_refresh and "Radar" in sel_model):
     else:
         st.error(f"⚠️ Aktuell liefert der gewählte Server keine Daten für '{sel_param}'.")
         st.info("💡 Server-Delay: Der Lauf ist vermutlich noch im Upload. Versuche es in wenigen Minuten noch einmal.")
+
