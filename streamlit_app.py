@@ -43,29 +43,35 @@ temp_colors = [
 ]
 cmap_temp = mcolors.LinearSegmentedColormap.from_list("custom_temp", temp_colors)
 
-# --- NIEDERSCHLAG (DEINE EIGENEN FARBEN - HELLER & FLÜSSIG) ---
-precip_values = [0, 0.5, 1, 2, 3, 5, 10, 20, 30, 40, 50, 75, 100]
+# --- NIEDERSCHLAG (DEINE EXAKTE HTML-FARBPALETTE) ---
+# Werte in Millimeter
+precip_values = [0, 0.2, 0.5, 1.0, 1.5, 2.0, 3, 4, 5, 8, 12, 15, 20, 30, 40, 50]
 precip_colors = [
-    '#FFFFFF', # 0: weiß
-    '#ADD8E6', # 0.5: hellblau
-    '#4169E1', # 1: royalblue (helleres dunkelblau, hebt sich gut ab)
-    '#228B22', # 2: forestgreen (helleres dunkelgrün, frischerer Übergang)
-    '#FFFF00', # 3: gelb
-    '#FFA500', # 5: orange
-    '#FF0000', # 10: rot
-    '#8B0000', # 20: dunkelrot
-    '#800080', # 30: lila
-    '#FF00FF', # 40: magenta
-    '#FFC0CB', # 50: rosa
-    '#FAFAFA', # 75: fast-weiß (minimales Off-White, damit es nicht mit 0 verschwimmt)
-    '#808080'  # 100: grau
+    '#FFFFFF', # 0: white
+    '#87CEEB', # 0.2: Skyblue
+    '#1E90FF', # 0.5: DodgerBlue
+    '#191970', # 1.0: Midnightblue
+    '#006400', # 1.5: Darkgreen
+    '#32CD32', # 2.0: Limegreen
+    '#FFFF00', # 3: yellow
+    '#FFA500', # 4: orange
+    '#FF0000', # 5: red
+    '#8B0000', # 8: darkred
+    '#800000', # 12: maroon
+    '#4B0082', # 15: indigo
+    '#800080', # 20: purple
+    '#9400D3', # 30: darkviolet
+    '#7B68EE', # 40: mediumslateblue
+    '#FFFFFF'  # 50: richtung weiß
 ]
 
-# Gamma-Korrektur (0.5), damit die Skala für die kleinen Werte gestreckt bleibt und gut lesbar ist!
-gamma_precip = 0.5
-precip_anchors = [(v / 100.0)**gamma_precip for v in precip_values]
+# Da die Werte nicht linear verteilt sind, berechnen wir die relativen Positionen
+# für die Colormap (0.0 bis 1.0) basierend auf dem Maximalwert (50)
+vmax_precip = 50.0
+precip_anchors = [v / vmax_precip for v in precip_values]
 cmap_precip = mcolors.LinearSegmentedColormap.from_list("custom_precip", list(zip(precip_anchors, precip_colors)))
-norm_precip = mcolors.PowerNorm(gamma=gamma_precip, vmin=0, vmax=100)
+# Lineare Normalisierung reicht hier völlig aus, da die Anker die Verteilung übernehmen
+norm_precip = mcolors.Normalize(vmin=0, vmax=vmax_precip)
 
 # --- CAPE (EXAKTE GRENZWERTE) ---
 cape_levels = [0, 25, 50, 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 10000]
@@ -383,9 +389,10 @@ if generate:
             plt.colorbar(im, label="Radar-Reflektivität in dBZ", shrink=0.4, ticks=[0, 15, 30, 45, 60, 75])
             
         elif "Niederschlag" in sel_param:
-            # Deine angepasste Farbpalette kommt jetzt absolut flüssig auf die Karte!
+            # Deine exakten HTML-Töne werden hier mit linearer Verteilung und Ankern flüssig gerendert!
             im = ax.pcolormesh(lons, lats, data, cmap=cmap_precip, norm=norm_precip, shading='auto', zorder=5)
-            ticks_precip = [0, 2, 4, 6, 8, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+            # Genau angepasste Legenden-Schritte
+            ticks_precip = [0, 0.5, 1, 2, 5, 10, 20, 30, 40, 50]
             plt.colorbar(im, label="Niederschlagssumme in mm", shrink=0.4, ticks=ticks_precip)
             
         elif "Gesamtbedeckung" in sel_param:
