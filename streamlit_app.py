@@ -13,17 +13,44 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import numpy as np
 
+# NEUE IMPORTS FÜR DAS DWD ECHTZEIT-RADAR
+import gzip
+import re
+import traceback
+
+# Optional: Streamlit Autorefresh für das Live-Radar
+try:
+    from streamlit_autorefresh import st_autorefresh
+except ImportError:
+    st_autorefresh = None
+
 # ==============================================================================
 # 1. SETUP, KONFIGURATION & AGGRESSIVES CACHE-MANAGEMENT
 # ==============================================================================
-st.set_page_config(page_title="WarnwetterBB | Pro-Zentrale", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="WarnwetterBB | Pro-Zentrale", 
+    layout="wide", 
+    initial_sidebar_state="expanded"
+)
 
 def cleanup_temp_files():
-    temp_files = ["temp.grib", "temp_gfs.grib", "temp_ecmwf.grib", "temp.grib.idx", "temp_gfs.grib.idx"]
+    """
+    Räumt temporäre Dateien auf, die beim Herunterladen und Entpacken 
+    der GRIB-Daten entstehen, um Speicherlecks zu vermeiden.
+    """
+    temp_files = [
+        "temp.grib", 
+        "temp_gfs.grib", 
+        "temp_ecmwf.grib", 
+        "temp.grib.idx", 
+        "temp_gfs.grib.idx"
+    ]
     for file in temp_files:
         if os.path.exists(file):
-            try: os.remove(file)
-            except: pass
+            try: 
+                os.remove(file)
+            except Exception as e: 
+                pass # Silent fail, falls Datei noch im Zugriff ist
 
 LOCAL_TZ = ZoneInfo("Europe/Berlin")
 WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
@@ -31,6 +58,7 @@ WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 # ==============================================================================
 # 2. MASTER-FARBSKALEN
 # ==============================================================================
+# Temperatur-Farbskala (-30 bis +30 Grad Celsius)
 temp_colors = [
     (0.0, '#D3D3D3'), (5/60, '#FFFFFF'), (10/60, '#FFC0CB'), (15/60, '#FF00FF'),
     (20/60, '#800080'), (20.01/60, '#00008B'), (25/60, '#0000CD'), (29.99/60, '#ADD8E6'),
@@ -39,7 +67,7 @@ temp_colors = [
 ]
 cmap_temp = mcolors.LinearSegmentedColormap.from_list("custom_temp", temp_colors)
 
-# DEINE EXAKTE HTML-FARBPALETTE
+# DEINE EXAKTE HTML-FARBPALETTE FÜR NIEDERSCHLAG
 precip_values = [0, 0.2, 0.5, 1.0, 1.5, 2.0, 3, 4, 5, 8, 12, 15, 20, 30, 40, 50]
 precip_colors = [
     '#FFFFFF', '#87CEEB', '#1E90FF', '#191970', '#006400', '#32CD32', '#FFFF00', 
@@ -51,7 +79,7 @@ precip_anchors = [v / vmax_precip for v in precip_values]
 cmap_precip = mcolors.LinearSegmentedColormap.from_list("custom_precip", list(zip(precip_anchors, precip_colors)))
 norm_precip = mcolors.Normalize(vmin=0, vmax=vmax_precip)
 
-# AVIATION FLUGSICHERHEITS-SKALA
+# AVIATION FLUGSICHERHEITS-SKALA (Wolkenuntergrenze)
 base_levels = [0, 100, 200, 300, 400, 500, 750, 1000, 1500, 2000, 3000, 8000]
 base_colors = [
     '#FF00FF', '#FF0000', '#FFA500', '#FFFF00', '#ADFF2F', '#32CD32', '#00BFFF', 
@@ -60,6 +88,7 @@ base_colors = [
 cmap_base = mcolors.ListedColormap(base_colors)
 norm_base = mcolors.BoundaryNorm(base_levels, cmap_base.N)
 
+# CAPE-Skala (Konvektive verfügbare potentielle Energie)
 cape_levels = [0, 25, 50, 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 10000]
 cape_colors = [
     '#006400', '#2E8B57', '#ADFF2F', '#FFFF00', '#FFB347', '#FFA500', 
@@ -68,6 +97,7 @@ cape_colors = [
 cmap_cape = mcolors.ListedColormap(cape_colors)
 norm_cape = mcolors.BoundaryNorm(cape_levels, cmap_cape.N)
 
+# RADAR-Reflektivität (dBZ)
 radar_levels = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80]
 radar_colors = [
     '#FFFFFF', '#B0E0E6', '#00BFFF', '#0000FF', '#00FF00', '#32CD32', '#008000', 
@@ -76,6 +106,7 @@ radar_colors = [
 cmap_radar = mcolors.ListedColormap(radar_colors)
 norm_radar = mcolors.BoundaryNorm(radar_levels, cmap_radar.N)
 
+# Weitere Hilfsskalen
 cmap_cin = mcolors.LinearSegmentedColormap.from_list("cin", ['#FFFFFF', '#ADD8E6', '#0000FF', '#00008B', '#000000'], N=256)
 cmap_clouds = mcolors.LinearSegmentedColormap.from_list("clouds", ['#1E90FF', '#87CEEB', '#D3D3D3', '#FFFFFF'], N=256)
 cmap_relhum = mcolors.LinearSegmentedColormap.from_list("relhum", ['#8B4513', '#F4A460', '#FFFFE0', '#90EE90', '#008000', '#0000FF'], N=256)
@@ -87,6 +118,7 @@ cmap_heli = mcolors.LinearSegmentedColormap.from_list("heli", ['#FFFFFF', '#00FF
 cmap_lifted = mcolors.LinearSegmentedColormap.from_list("lifted", ['#FF00FF', '#FF0000', '#FFA500', '#FFFF00', '#00FF00', '#0000FF'], N=256)
 cmap_sun = mcolors.LinearSegmentedColormap.from_list("sun", ['#808080', '#FFD700', '#FFA500', '#FF8C00'], N=256)
 
+# Signifikantes Wetter Legenden-Daten
 WW_LEGEND_DATA = {
     "Nebel": ("#FFFF00", list(range(40, 50))),
     "Regen leicht": ("#00FF00", [50, 51, 58, 60, 80]),
@@ -105,9 +137,13 @@ WW_LEGEND_DATA = {
 cmap_ww = mcolors.ListedColormap(['#FFFFFF00'] + [c for l, (c, codes) in WW_LEGEND_DATA.items()])
 
 # ==============================================================================
-# 3. DAS EISERNE ROUTING-SYSTEM
+# 3. DAS EISERNE ROUTING-SYSTEM (JETZT MIT ECHTZEIT RADAR)
 # ==============================================================================
 MODEL_ROUTER = {
+    "DWD Echtzeit-Radar": {
+        "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)"],
+        "params": ["Echtzeit-Radar (Reflektivität)"]
+    },
     "ICON-D2": {
         "regions": ["Deutschland", "Brandenburg/Berlin", "Mitteleuropa (DE, PL)", "Alpenraum"],
         "params": ["Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", 
@@ -150,6 +186,9 @@ MODEL_ROUTER = {
 }
 
 def estimate_latest_run(model, now_utc):
+    """
+    Ermittelt den aktuellsten verfügbaren Modelllauf basierend auf festen Update-Zyklen.
+    """
     if "D2" in model or "EU" in model:
         run_h = ((now_utc.hour - 3) // 3) * 3
         if run_h < 0: return (now_utc - timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0)
@@ -162,9 +201,109 @@ def estimate_latest_run(model, now_utc):
         run_h = ((now_utc.hour - 10) // 12) * 12
         if run_h < 0: return (now_utc - timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
         return now_utc.replace(hour=run_h, minute=0, second=0, microsecond=0)
+    return now_utc
 
 # ==============================================================================
-# 4. DYNAMISCHE SIDEBAR
+# 4. HOCHROBUSTES DWD ECHTZEIT-RADAR MODUL (WN-KOMPOSIT)
+# ==============================================================================
+def get_dwd_radar_file_list(url_base):
+    """
+    Holt die HTML-Verzeichnisliste vom DWD-Server und extrahiert alle 
+    verfügbaren WN-Kompositdateien (Binärformat, gepackt als .gz).
+    """
+    try:
+        response = requests.get(url_base, timeout=10)
+        response.raise_for_status()
+        # Suche nach Dateinamen-Muster in den href-Attributen
+        file_pattern = re.compile(r'href="(raa01-wn_10000-[0-9]{10}-dwd---bin\.gz)"')
+        files = file_pattern.findall(response.text)
+        return sorted(list(set(files)))
+    except requests.exceptions.RequestException as e:
+        st.error(f"⚠️ DWD Server nicht erreichbar: {e}")
+        return []
+
+def extract_dwd_radar_timestamp(filename):
+    """
+    Extrahiert den exakten Zeitstempel (YYMMDDHHMM) aus dem DWD-Dateinamen.
+    """
+    match = re.search(r'-([0-9]{10})-dwd', filename)
+    if match:
+        return match.group(1)
+    return datetime.now(timezone.utc).strftime("%y%m%d%H%M")
+
+def generate_dwd_radar_grid():
+    """
+    Generiert das statische geografische Gitter für das DWD WN-Radarprodukt.
+    Das WN-Produkt ist eine stereografische Projektion, wir nähern es hier 
+    für PlateCarree durch eine direkte Matrixzuweisung an.
+    """
+    # Deutschland-Grid für WN-Produkt (900x900 Pixel)
+    lons_1d = np.linspace(2.0, 16.0, 900)
+    lats_1d = np.linspace(46.0, 56.0, 900)
+    lons_grid, lats_grid = np.meshgrid(lons_1d, lats_1d)
+    return lons_grid, lats_grid
+
+def fetch_live_radar_data(debug=False):
+    """
+    Hauptfunktion zum Herunterladen, Entpacken und Decodieren des binären 
+    DWD WN-Radarprodukts (Reflektivität in dBZ). 
+    Enthält massives Error-Handling und Fallbacks für maximale Stabilität.
+    """
+    url_base = "https://opendata.dwd.de/weather/radar/composit/wn/"
+    debug_logs = [f"Abfrage Radar-Basis-URL: {url_base}"]
+    
+    files = get_dwd_radar_file_list(url_base)
+    if not files:
+        return None, None, None, None, debug_logs
+    
+    # Wir iterieren rückwärts durch die neuesten Dateien. Oft ist die allerneueste 
+    # Datei gerade im Schreibvorgang auf dem DWD-Server (0 Bytes), daher der Fallback.
+    for latest_file in reversed(files[-5:]):
+        file_url = url_base + latest_file
+        debug_logs.append(f"Versuche Download: {file_url}")
+        
+        try:
+            r = requests.get(file_url, timeout=15)
+            if r.status_code == 200 and len(r.content) > 1000:
+                # Entpacken der GZ-Datei im Speicher
+                with gzip.open(io.BytesIO(r.content), 'rb') as f:
+                    # Das DWD-Radardatenformat hat einen exakten 540-Byte Header (ASCII),
+                    # der übersprungen werden muss, um an die Rohdaten zu kommen.
+                    header = f.read(540)
+                    
+                    # Die restlichen Daten sind ein flaches uint8 Array
+                    raw_binary_data = np.frombuffer(f.read(), dtype=np.uint8)
+                    
+                    # Das WN-Produkt MUSS exakt 900x900 = 810.000 Werte haben
+                    if len(raw_binary_data) >= 810000:
+                        data_2d = raw_binary_data[:810000].reshape(900, 900).astype(float)
+                        
+                        # DWD Umrechnungsformel: Wert in dBZ = (Rohwert - 64) / 2.0
+                        # Werte unter 0 (Rauschen/Clutter) werden ausgeblendet.
+                        data_dbz = (data_2d - 64) / 2.0
+                        data_dbz[data_dbz < 0] = np.nan
+                        
+                        # Generieren der Koordinatenmatrizen
+                        lons, lats = generate_dwd_radar_grid()
+                        
+                        # Der DWD-Datensatz wird von Nord nach Süd geschrieben, 
+                        # Matplotlib erwartet Süd nach Nord. Daher Array spiegeln [::-1]
+                        data_dbz_flipped = data_dbz[::-1]
+                        
+                        timestamp = extract_dwd_radar_timestamp(latest_file)
+                        debug_logs.append(f"Erfolgreich decodiert. Zeitstempel: {timestamp}")
+                        
+                        return data_dbz_flipped, lons, lats, timestamp, debug_logs
+            else:
+                debug_logs.append(f"Datei unvollständig oder leer (Status {r.status_code}).")
+        except Exception as e:
+            debug_logs.append(f"Fehler bei {latest_file}: {str(e)}")
+            continue
+            
+    return None, None, None, None, debug_logs
+
+# ==============================================================================
+# 5. DYNAMISCHE SIDEBAR MIT AUTO-REFRESH LOGIK
 # ==============================================================================
 with st.sidebar:
     st.header("🛰️ Modell-Zentrale")
@@ -181,32 +320,47 @@ with st.sidebar:
         sel_param = st.radio("Parameter", valid_params, label_visibility="collapsed")
     
     with st.expander("⏱️ 4. Vorhersage-Stunde (MEZ/MESZ)", expanded=True):
-        if "EU" in sel_model: hours = list(range(1, 79))
-        elif "GFS" in sel_model or "Global" in sel_model: hours = list(range(3, 123, 3))
-        elif "ECMWF" in sel_model: hours = list(range(3, 147, 3))
-        else: hours = list(range(1, 49))
-        
-        now_utc = datetime.now(timezone.utc)
-        base_run = estimate_latest_run(sel_model, now_utc)
-        
-        hour_labels = []
-        for h in hours:
-            target_dt_utc = base_run + timedelta(hours=h)
-            target_dt_loc = target_dt_utc.astimezone(LOCAL_TZ)
-            tz_str = "MESZ" if target_dt_loc.dst() else "MEZ"
-            wt = WOCHENTAGE[target_dt_loc.weekday()]
-            time_str = f"+{h}h  ({wt}, {target_dt_loc.strftime('%d.%m. %H:%M')} {tz_str})"
-            hour_labels.append(time_str)
+        if "Radar" in sel_model:
+            # Bei Live-Radar gibt es keine Vorhersagestunden, daher wird das UI angepasst.
+            st.info("Echtzeit-Daten: Die Zeitauswahl ist für das Live-Radar automatisch deaktiviert.")
+            sel_hour = 0
+            sel_hour_str = "Live"
+        else:
+            if "EU" in sel_model: hours = list(range(1, 79))
+            elif "GFS" in sel_model or "Global" in sel_model: hours = list(range(3, 123, 3))
+            elif "ECMWF" in sel_model: hours = list(range(3, 147, 3))
+            else: hours = list(range(1, 49))
             
-        sel_hour_str = st.radio("Zeit", hour_labels, label_visibility="collapsed")
-        sel_hour = int(sel_hour_str.split("h")[0].replace("+", ""))
+            now_utc = datetime.now(timezone.utc)
+            base_run = estimate_latest_run(sel_model, now_utc)
+            
+            hour_labels = []
+            for h in hours:
+                target_dt_utc = base_run + timedelta(hours=h)
+                target_dt_loc = target_dt_utc.astimezone(LOCAL_TZ)
+                tz_str = "MESZ" if target_dt_loc.dst() else "MEZ"
+                wt = WOCHENTAGE[target_dt_loc.weekday()]
+                time_str = f"+{h}h  ({wt}, {target_dt_loc.strftime('%d.%m. %H:%M')} {tz_str})"
+                hour_labels.append(time_str)
+                
+            sel_hour_str = st.radio("Zeit", hour_labels, label_visibility="collapsed")
+            sel_hour = int(sel_hour_str.split("h")[0].replace("+", ""))
     
     st.markdown("---")
+    # Isobaren und Gewitter-Schraffur machen beim Radar keinen Sinn bzw. stören
     show_isobars = st.checkbox("Isobaren (Luftdruck) einblenden", value=True)
-    
-    # NEU: Der Gewitter-Schalter!
     show_storms = st.checkbox("⚡ Gewitter-Risiko rot schraffieren", value=True, help="Zieht rote, diagonale Linien über Gebiete, in denen das Modell Gewitter berechnet.")
     
+    st.markdown("---")
+    
+    # NEU: Auto-Refresh-Schalter für den perfekten Live-Betrieb des Radars
+    enable_refresh = st.checkbox("🔄 Auto-Update (5 Min.)", value=False, help="Aktualisiert die Karte vollautomatisch alle 5 Minuten. Ideal für das Live-Radar.")
+    if enable_refresh and st_autorefresh is not None:
+        # 300.000 Millisekunden = 5 Minuten
+        st_autorefresh(interval=300000, key="auto_refresh_radar")
+    elif enable_refresh and st_autorefresh is None:
+        st.warning("Auto-Update nicht möglich. 'streamlit-autorefresh' Paket fehlt.")
+        
     st.markdown("---")
     generate = st.button("🚀 Profi-Karte generieren", use_container_width=True)
     
@@ -214,10 +368,15 @@ with st.sidebar:
         debug_mode = st.checkbox("URL-Ping aktivieren (Zeigt Live-Serveranfragen)")
 
 # ==============================================================================
-# 5. DATA FETCH ENGINE
+# 6. DATA FETCH ENGINE (GRIB + RADAR WEICHE)
 # ==============================================================================
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_meteo_data(model, param, hr, debug=False):
+    # RADAR-INTERCEPTOR: Fängt Echtzeit-Radar ab, bevor die GRIB-Logik startet.
+    if "Radar" in model and "Echtzeit" in param:
+        r_data, r_lons, r_lats, r_ts, r_logs = fetch_live_radar_data(debug)
+        return r_data, r_lons, r_lats, r_ts, r_logs
+
     dyn_cloud_base = "ceiling" if "D2" in model else "hbas_con"
     
     p_map = {
@@ -332,19 +491,25 @@ def fetch_meteo_data(model, param, hr, debug=False):
     return None, None, None, None, debug_logs
 
 # ==============================================================================
-# 6. KARTENGENERATOR & PLOTTING
+# 7. KARTENGENERATOR & PLOTTING
 # ==============================================================================
-if generate:
+# Die Karte wird generiert bei Klick auf den Button ODER wenn Auto-Update beim Radar anspringt
+if generate or (enable_refresh and "Radar" in sel_model):
     cleanup_temp_files()
     
     with st.spinner(f"🛰️ Lade {sel_param} aus {sel_model}..."):
-        # Normalen Datensatz laden
+        # Normalen Datensatz (oder Radar) laden
         data, lons, lats, run_id, d_logs = fetch_meteo_data(sel_model, sel_param, sel_hour, debug_mode)
-        iso_data, ilons, ilats, _, _ = fetch_meteo_data(sel_model, "Isobaren", sel_hour) if show_isobars else (None, None, None, None, None)
         
-        # HEIMLICHER GEWITTER-DOWNLOAD (Nur wenn Schalter aktiv und Parameter verfügbar)
+        # Isobaren Overlay (Macht beim Echtzeitradar keinen Sinn, daher wird es unterdrückt)
+        if show_isobars and "Radar" not in sel_model:
+            iso_data, ilons, ilats, _, _ = fetch_meteo_data(sel_model, "Isobaren", sel_hour) 
+        else:
+            iso_data, ilons, ilats = None, None, None
+            
+        # HEIMLICHER GEWITTER-DOWNLOAD (Nur wenn Schalter aktiv und Parameter im Modell verfügbar)
         ww_data = None
-        if show_storms and sel_param != "Signifikantes Wetter" and "Signifikantes Wetter" in MODEL_ROUTER[sel_model]["params"]:
+        if show_storms and "Radar" not in sel_model and sel_param != "Signifikantes Wetter" and "Signifikantes Wetter" in MODEL_ROUTER[sel_model]["params"]:
             ww_data, wlons, wlats, _, _ = fetch_meteo_data(sel_model, "Signifikantes Wetter", sel_hour, False)
 
     if debug_mode and d_logs:
@@ -386,8 +551,12 @@ if generate:
             plt.colorbar(im, label="CIN (Hemmung/Deckel) in J/kg", shrink=0.4)
             
         elif "Radar" in sel_param: 
+            # Die gleiche Skala wird nun für "Simuliertes Radar" und das neue "Echtzeit-Radar" genutzt!
             im = ax.pcolormesh(lons, lats, data, cmap=cmap_radar, norm=norm_radar, shading='auto', zorder=5)
             plt.colorbar(im, label="Radar-Reflektivität in dBZ", shrink=0.4, ticks=[0, 15, 30, 45, 60, 75])
+            if "Echtzeit" in sel_param:
+                # Kleiner Hinweis für das Live-Radar bezüglich der minimalen Projektionsabweichung
+                ax.text(0.5, 0.01, "Echtzeit WN-Produkt", transform=ax.transAxes, fontsize=6, color='black', ha='center', zorder=30)
             
         elif "Niederschlag" in sel_param:
             im = ax.pcolormesh(lons, lats, data, cmap=cmap_precip, norm=norm_precip, shading='auto', zorder=5)
@@ -462,7 +631,7 @@ if generate:
             ax.legend(handles=patches, loc='lower left', title="Wetter-Klassifikation", fontsize='6', title_fontsize='7', framealpha=0.9).set_zorder(25)
 
         # ----------------------------------------------------------------------
-        # NEU: DIE ROTE GEWITTER-SCHRAFFUR OVERLAY (//////)
+        # DIE ROTE GEWITTER-SCHRAFFUR OVERLAY (//////)
         # ----------------------------------------------------------------------
         if show_storms and ww_data is not None:
             # Maske bauen: Gewitter-Codes (95=leicht, 96/97/99=mäßig bis schwer)
@@ -486,13 +655,24 @@ if generate:
             ax.clabel(cs, inline=True, fontsize=8, fmt='%1.0f')
 
         # ----------------------------------------------------------------------
-        # HEADER INFO
+        # HEADER INFO (FÜR RADAR UND MODELLE GETRENNT)
         # ----------------------------------------------------------------------
-        v_dt_utc = datetime.strptime(run_id, "%Y%m%d%H").replace(tzinfo=timezone.utc) + timedelta(hours=sel_hour)
-        v_dt_loc = v_dt_utc.astimezone(LOCAL_TZ)
-        tz_str = "MESZ" if v_dt_loc.dst() else "MEZ"
-        
-        info_txt = f"Modell: {sel_model}\nParameter: {sel_param}\nTermin: {v_dt_loc.strftime('%d.%m.%Y %H:%M')} {tz_str}\nModell-Lauf: {run_id[-2:]}Z"
+        if "Radar" in sel_model:
+            # Timestamp Parsing für DWD Radar (Format: YYMMDDHHMM)
+            try:
+                dt_obj = datetime.strptime(run_id, "%y%m%d%H%M").replace(tzinfo=timezone.utc)
+                dt_loc = dt_obj.astimezone(LOCAL_TZ)
+                time_display = dt_loc.strftime('%d.%m.%Y %H:%M') + (" MESZ" if dt_loc.dst() else " MEZ")
+            except:
+                time_display = run_id # Fallback
+            info_txt = f"Modell: {sel_model}\nParameter: {sel_param}\nLive-Stand: {time_display}\n(Aktualisiert automatisch)"
+        else:
+            # Herkömmliche Modell-Zeitrechnung
+            v_dt_utc = datetime.strptime(run_id, "%Y%m%d%H").replace(tzinfo=timezone.utc) + timedelta(hours=sel_hour)
+            v_dt_loc = v_dt_utc.astimezone(LOCAL_TZ)
+            tz_str = "MESZ" if v_dt_loc.dst() else "MEZ"
+            info_txt = f"Modell: {sel_model}\nParameter: {sel_param}\nTermin: {v_dt_loc.strftime('%d.%m.%Y %H:%M')} {tz_str}\nModell-Lauf: {run_id[-2:]}Z"
+            
         ax.text(0.02, 0.98, info_txt, transform=ax.transAxes, fontsize=7, fontweight='bold', va='top', bbox=dict(facecolor='white', alpha=0.8, boxstyle='round,pad=0.3', edgecolor='gray'), zorder=30)
 
         st.pyplot(fig)
@@ -506,10 +686,11 @@ if generate:
         
         col1, col2, col3 = st.columns([1,2,1])
         with col2:
+            dl_suffix = "LIVE" if "Radar" in sel_model else f"{sel_hour}h"
             st.download_button(
                 label="📥 Karte als PNG speichern",
                 data=img_buffer,
-                file_name=f"WarnwetterBB_{sel_model}_{sel_param.replace(' ', '_')}_{sel_hour}h.png",
+                file_name=f"WarnwetterBB_{sel_model}_{sel_param.replace(' ', '_')}_{dl_suffix}.png",
                 mime="image/png",
                 use_container_width=True
             )
@@ -517,5 +698,9 @@ if generate:
         cleanup_temp_files()
         
     else:
-        st.error(f"⚠️ Der Server von {sel_model} liefert für '{sel_param}' (+{sel_hour}h) aktuell keine Daten aus.")
-        st.info("💡 Tipp: Versuch eine etwas spätere Vorhersagestunde oder aktiviere links die 'Entwickler-Konsole', um die Pings zu prüfen!")
+        st.error(f"⚠️ Keine Daten für '{sel_param}' verfügbar.")
+        if "Radar" in sel_model:
+            st.info("💡 Das DWD Radar wird eventuell gerade serverseitig aktualisiert. Warte kurz und lade neu.")
+        else:
+            st.info("💡 Tipp: Versuch eine etwas spätere Vorhersagestunde oder aktiviere links die 'Entwickler-Konsole', um die Pings zu prüfen!")
+
