@@ -32,7 +32,7 @@ LOCAL_TZ = ZoneInfo("Europe/Berlin")
 WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 # ==============================================================================
-# 2. MASTER-FARBSKALEN (INKLUSIVE NEUER AVIATION-WOLKENSKALA)
+# 2. MASTER-FARBSKALEN
 # ==============================================================================
 
 # --- TEMPERATUR (Glatter 10er Übergang) ---
@@ -57,7 +57,6 @@ cmap_precip = mcolors.LinearSegmentedColormap.from_list("custom_precip", list(zi
 norm_precip = mcolors.Normalize(vmin=0, vmax=vmax_precip)
 
 # --- WOLKENUNTERGRENZE (AVIATION / FLUGSICHERHEITS-SKALA) ---
-# Hebt tiefe Wolken (Nebel/Hochnebel) extrem aggressiv hervor!
 base_levels = [0, 100, 200, 300, 400, 500, 750, 1000, 1500, 2000, 3000, 8000]
 base_colors = [
     '#FF00FF', # 0-100m: Magenta (Bodenaufliegend)
@@ -442,14 +441,8 @@ if generate:
             plt.colorbar(im, label="Sichtweite in m (Weiß=Nebel)", shrink=0.4)
             
         elif "Wolkenuntergrenze" in sel_param:
-            # Pcolormesh mit der scharfen Aviation-Farbskala
+            # Pcolormesh mit der scharfen Aviation-Farbskala, ABER ohne Linien-Tohuwabohu!
             im = ax.pcolormesh(lons, lats, data, cmap=cmap_base, norm=norm_base, shading='auto', zorder=5)
-            
-            # Isolinien einzeichnen: 100, 200, 300, 400, 500, dann 750, 1000, 1250...
-            contour_levels = [100, 200, 300, 400, 500] + list(range(750, 3001, 250))
-            cs_base = ax.contour(lons, lats, data, colors='black', linewidths=0.5, levels=contour_levels, zorder=6)
-            ax.clabel(cs_base, inline=True, fontsize=6, fmt='%1.0f')
-            
             plt.colorbar(im, label="Wolkenuntergrenze in m", shrink=0.4, ticks=base_levels)
             
         elif "Wolkenobergrenze" in sel_param:
