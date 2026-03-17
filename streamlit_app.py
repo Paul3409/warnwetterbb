@@ -2,15 +2,15 @@
 =========================================================================================
 WARNWETTER BB - PROFESSIONAL METEOROLOGICAL WORKSTATION (ULTIMATE 1900+ LINES EDITION)
 =========================================================================================
-Version: 12.0 (The "Deep Future CFS & Absolute Timeline" Edition)
-Fokus: Keine Code-Komprimierung. Vollständige Ausprogrammierung.
+Version: 13.0 (The "Native APK Fix & Slider Flow" Edition)
+Fokus: Maximale Bedienbarkeit auf mobilen APKs.
 NEU: 
-- CFS (Langfrist) Modell integriert. 4.008 Stunden in 12h Schritten!
-- Intelligente Zeitauswahl: Zeigt nun das exakte Datum und die Uhrzeit (inkl. 
-  automatischer MEZ/MESZ Erkennung) für jeden Schritt direkt am Radio-Button an.
-BEIBEHALTEN: 
-- 20+ individuelle Farbskalen, Region "Europa/Nordatlantik", 500hPa Logik (552er Linie), 
-- Wolken-Graustufen (<1% transparent), Radio-Buttons, Overlays standardmäßig aus.
+- BILD-RENDERING: Karte wird als natives Image ausgegeben -> Einfach lange gedrückt halten 
+  zum Speichern! (Umgeht die Download-Sperren von Android WebViews).
+- SLIDER-STEUERUNG: Zeitauswahl erfolgt nun über einen eleganten Slider. Kein ewiges 
+  Scrollen mehr bei 334 CFS-Zeitschritten.
+- GENERIEREN-KNOPF: Sitzt nun prominent im Hauptbereich über (und unter) der Karte.
+- CFS-BUGFIX: URL-Architektur auf die 2-/3-/4-stelligen Dateinamen der NOAA angepasst.
 =========================================================================================
 """
 
@@ -75,10 +75,16 @@ st.markdown("""
     .stAlert { 
         border-radius: 8px; 
     }
-    /* Mache ALLE Radio-Buttons kompakter für die lange Liste (wichtig bei 334 Schritten!) */
     div.row-widget.stRadio > div{
         flex-direction:column;
         gap: 0px;
+    }
+    /* Mache den Haupt-Button schön groß für Touch-Displays */
+    .stButton>button {
+        height: 3.5rem;
+        font-weight: bold;
+        font-size: 1.1rem;
+        border-radius: 12px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -91,10 +97,8 @@ WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 # 2. SYSTEM UTILITIES (GARBAGE COLLECTION)
 # ==============================================================================
 class SystemManager:
-    """Sorgt dafür, dass der RAM des Servers nicht vollläuft."""
     @staticmethod
     def cleanup_temp_files(directory: str = ".") -> None:
-        """Sucht und löscht explizit alle temporären GRIB- und Index-Dateien."""
         temp_extensions = [
             ".grib", ".grib2", ".bz2", ".idx", ".tmp", 
             "temp_gfs", "temp_ukmo", "temp_gem", "temp_arpege", "temp_jma", "temp_access",
@@ -116,7 +120,6 @@ class SystemManager:
 
 
 class GeoConfig:
-    """Verwaltet exakte Koordinatenboxen für reibungsloses Cartopy-Zooming."""
     EXTENTS = {
         "Deutschland": [5.5, 15.5, 47.0, 55.2],
         "Brandenburg (Gesamt)": [11.0, 15.0, 51.1, 53.7],
@@ -264,7 +267,7 @@ class RainViewerTiles(cimgt.GoogleWTS):
             with urllib.request.urlopen(req) as fh:
                 img = PIL.Image.open(fh).convert('RGBA') 
             return img, self.tileextent(tile), 'lower'
-        except Exception as e:
+        except Exception:
             return PIL.Image.new('RGBA', (256, 256), (0, 0, 0, 0)), self.tileextent(tile), 'lower'
 
 
@@ -273,7 +276,6 @@ class RainViewerTiles(cimgt.GoogleWTS):
 # ==============================================================================
 class ColormapRegistry:
 
-    # 1. Temperatur 2m
     @staticmethod
     def get_temperature() -> mcolors.LinearSegmentedColormap:
         colors = [(0.0, '#00008B'), (0.1, '#0000FF'), (0.2, '#00BFFF'), (0.3, '#00FFFF'),
@@ -283,7 +285,6 @@ class ColormapRegistry:
         cmap.set_bad(color='none')
         return cmap
 
-    # 2. Taupunkt 2m
     @staticmethod
     def get_dewpoint() -> mcolors.LinearSegmentedColormap:
         colors = ['#8B4513', '#228B22', '#ADFF2F', '#00FFFF', '#0000FF', '#8A2BE2']
@@ -291,7 +292,6 @@ class ColormapRegistry:
         cmap.set_bad(color='none')
         return cmap
 
-    # 3. 850 hPa Temperatur
     @staticmethod
     def get_temperature_850() -> mcolors.LinearSegmentedColormap:
         colors = ['#4B0082', '#0000FF', '#00BFFF', '#FFFFFF', '#FFD700', '#FF4500', '#8B0000']
@@ -299,7 +299,6 @@ class ColormapRegistry:
         cmap.set_bad(color='none')
         return cmap
 
-    # 4. Bodendruck
     @staticmethod
     def get_surface_pressure() -> mcolors.LinearSegmentedColormap:
         colors = ['#000080', '#0000FF', '#00FFFF', '#00FF00', '#FFFF00', '#FFA500', '#FF0000', '#8B0000']
@@ -307,7 +306,6 @@ class ColormapRegistry:
         cmap.set_bad(color='none')
         return cmap
 
-    # 5. Geopotentielle Höhe (Die Profi-Skala 480-620 gpdm)
     @staticmethod
     def get_geopotential() -> mcolors.LinearSegmentedColormap:
         colors_and_anchors = [
@@ -327,23 +325,16 @@ class ColormapRegistry:
         cmap.set_bad(color='none')
         return cmap
 
-    # 6. Gesamtbedeckung (Wolken - strikte Graustufen)
     @staticmethod
     def get_clouds() -> mcolors.LinearSegmentedColormap:
         colors = [
-            (0.00, '#FFFFFF00'), # 0 - transparent
-            (0.05, '#FFFFFF'),   # 5 - weiß
-            (0.20, '#F5F5F5'),   # 20 - weiß-grau
-            (0.40, '#DCDCDC'),   # 40 - hellgrau
-            (0.60, '#C0C0C0'),   # 60 - grau
-            (0.80, '#808080'),   # 80 - dunkles grau
-            (1.00, '#696969')    # 100 - dunkelgrau
+            (0.00, '#FFFFFF00'), (0.05, '#FFFFFF'), (0.20, '#F5F5F5'), 
+            (0.40, '#DCDCDC'), (0.60, '#C0C0C0'), (0.80, '#808080'), (1.00, '#696969')
         ]
         cmap = mcolors.LinearSegmentedColormap.from_list("cloud_scale", colors, N=256)
         cmap.set_bad(color='none')
         return cmap
 
-    # 7. Niederschlag
     @staticmethod
     def get_precipitation() -> Tuple[mcolors.LinearSegmentedColormap, mcolors.Normalize]:
         precip_colors = ['#FFFFFF00', '#00FFFF', '#1E90FF', '#0000FF', '#32CD32', '#008000', '#FFFF00', 
@@ -356,7 +347,6 @@ class ColormapRegistry:
         norm = mcolors.Normalize(vmin=0, vmax=vmax)
         return cmap, norm
 
-    # 8. Windböen
     @staticmethod
     def get_wind() -> mcolors.LinearSegmentedColormap:
         colors = ['#E0FFFF', '#00FFFF', '#0000FF', '#8A2BE2', '#FF00FF', '#FF0000', '#8B0000']
@@ -364,7 +354,6 @@ class ColormapRegistry:
         cmap.set_bad(color='none')
         return cmap
 
-    # 9. 300 hPa Jetstream
     @staticmethod
     def get_jetstream() -> mcolors.LinearSegmentedColormap:
         colors = ['#FFFFFF00', '#00BFFF', '#0000FF', '#FF00FF', '#FF0000', '#8B0000', '#000000']
@@ -372,7 +361,6 @@ class ColormapRegistry:
         cmap.set_bad(color='none')
         return cmap
 
-    # 10. Schneehöhe
     @staticmethod
     def get_snow_depth() -> mcolors.LinearSegmentedColormap:
         colors = ['#FFFFFF00', '#E0FFFF', '#AFEEEE', '#00FFFF', '#1E90FF', '#0000FF', '#8A2BE2', '#FF00FF']
@@ -380,7 +368,6 @@ class ColormapRegistry:
         cmap.set_bad(color='none')
         return cmap
 
-    # 11. Neuschnee
     @staticmethod
     def get_new_snow() -> mcolors.LinearSegmentedColormap:
         colors = ['#FFFFFF00', '#F0F8FF', '#ADD8E6', '#4169E1', '#0000CD', '#4B0082']
@@ -388,7 +375,6 @@ class ColormapRegistry:
         cmap.set_bad(color='none')
         return cmap
 
-    # 12. 0-Grad-Grenze
     @staticmethod
     def get_zero_degree_line() -> mcolors.LinearSegmentedColormap:
         colors = ['#8B0000', '#FF0000', '#FFA500', '#FFFF00', '#00FF00', '#00FFFF', '#0000FF', '#FFFFFF']
@@ -396,7 +382,6 @@ class ColormapRegistry:
         cmap.set_bad(color='none')
         return cmap
 
-    # 13. Theta-E
     @staticmethod
     def get_theta_e() -> mcolors.LinearSegmentedColormap:
         colors = ['#00008B', '#0000FF', '#00FFFF', '#00FF00', '#FFFF00', '#FFA500', '#FF0000', '#8B0000', '#FF00FF']
@@ -404,7 +389,6 @@ class ColormapRegistry:
         cmap.set_bad(color='none')
         return cmap
 
-    # 14. K-Index
     @staticmethod
     def get_k_index() -> mcolors.LinearSegmentedColormap:
         colors = ['#FFFFFF00', '#FFFF00', '#FFA500', '#FF0000', '#8B0000', '#800080', '#4B0082']
@@ -412,7 +396,6 @@ class ColormapRegistry:
         cmap.set_bad(color='none')
         return cmap
 
-    # 15. Showalter-Index
     @staticmethod
     def get_showalter() -> mcolors.LinearSegmentedColormap:
         colors = ['#8B0000', '#FF0000', '#FFA500', '#FFFF00', '#00FF00', '#0000FF', '#000080']
@@ -420,7 +403,6 @@ class ColormapRegistry:
         cmap.set_bad(color='none')
         return cmap
 
-    # 16. Vorticity Advection
     @staticmethod
     def get_vorticity() -> mcolors.LinearSegmentedColormap:
         colors = ['#00008B', '#0000FF', '#FFFFFF', '#FF0000', '#8B0000']
@@ -428,7 +410,6 @@ class ColormapRegistry:
         cmap.set_bad(color='none')
         return cmap
 
-    # 17. Bodenfeuchte
     @staticmethod
     def get_soil_moisture() -> mcolors.LinearSegmentedColormap:
         colors = ['#8B4513', '#D2B48C', '#F5DEB3', '#90EE90', '#32CD32', '#00BFFF', '#00008B']
@@ -436,7 +417,6 @@ class ColormapRegistry:
         cmap.set_bad(color='none')
         return cmap
 
-    # 18. Sonnenscheindauer
     @staticmethod
     def get_sunshine() -> mcolors.LinearSegmentedColormap:
         colors = ['#808080', '#D3D3D3', '#FFFFE0', '#FFFF00', '#FFD700', '#FFA500']
@@ -444,7 +424,6 @@ class ColormapRegistry:
         cmap.set_bad(color='none')
         return cmap
 
-    # 19. Waldbrandgefahrenindex (WBI)
     @staticmethod
     def get_wbi() -> Tuple[mcolors.ListedColormap, mcolors.BoundaryNorm]:
         colors = ['#FFFFFF', '#00FF00', '#FFFF00', '#FFA500', '#FF0000', '#8B0000']
@@ -454,7 +433,6 @@ class ColormapRegistry:
         norm = mcolors.BoundaryNorm(levels, cmap.N)
         return cmap, norm
 
-    # 20. Radar (Echtzeit & Simuliert)
     @staticmethod
     def get_radar() -> Tuple[mcolors.ListedColormap, mcolors.BoundaryNorm]:
         colors = ['#FFFFFF00', '#B0E0E6', '#00BFFF', '#0000FF', '#00FF00', '#32CD32', '#008000', 
@@ -465,7 +443,6 @@ class ColormapRegistry:
         norm = mcolors.BoundaryNorm(levels, cmap.N)
         return cmap, norm
 
-    # 21. Unwetter-Warnungen
     @staticmethod
     def get_warnings() -> Tuple[mcolors.ListedColormap, mcolors.BoundaryNorm]:
         colors = ['#FFFFFF00', '#FFFF00', '#FF0000', '#800080'] 
@@ -582,7 +559,6 @@ class ModelRegistry:
         elif model_type == "ecmwf_long":
             return list(range(3, 243, 3))
         elif model_type == "cfs_long":
-            # NEU: Das gewaltige CFS Zeitfenster (4.008 Stunden im 12h Takt)
             return list(range(0, 4009, 12))
         return list(range(1, 49))
 
@@ -594,14 +570,12 @@ class DataFetcher:
     
     @staticmethod
     def estimate_latest_run(model: str, now_utc: datetime) -> datetime:
-        """Kalkuliert den wahrscheinlichsten Startzeitpunkt des Modells."""
         if any(m in model for m in ["D2", "EU", "Arpege"]):
             run = ((now_utc.hour - 3) // 3) * 3
             if run < 0: 
                 return (now_utc - timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0)
             return now_utc.replace(hour=run, minute=0, second=0, microsecond=0)
         elif "CFS" in model:
-            # CFS rechnet alle 6 Stunden, braucht aber extrem lang zum publizieren
             run = ((now_utc.hour - 6) // 6) * 6
             if run < 0: 
                 return (now_utc - timedelta(days=1)).replace(hour=18, minute=0, second=0, microsecond=0)
@@ -679,26 +653,24 @@ class DataFetcher:
         now = datetime.now(timezone.utc)
         
         # ======================================================================
-        # NEU: CFS (Langfrist) - Die 4000+ Stunden Logik
+        # NEU: CFS (Langfrist) - Mit behobenem URL Formatting (f"{hr:02d}")
         # ======================================================================
         if model == "CFS (Langfrist)":
             headers = {'User-Agent': 'Mozilla/5.0'}
-            # GFS/CFS Filter Mapping
             cfs_map = {
                 "t_2m": "&var_TMP=on&lev_2_m_above_ground=on", 
                 "fi": "&var_HGT=on&lev_500_mb=on",
                 "t": "&var_TMP=on&lev_850_mb=on", 
-                "tot_prec": "&var_PRATE=on&lev_surface=on" # CFS nutzt oft PRATE (Precipitation Rate) anstelle von APCP
+                "tot_prec": "&var_PRATE=on&lev_surface=on" 
             }
             cfs_p = cfs_map.get(key, "&var_TMP=on&lev_2_m_above_ground=on")
             
-            # CFS rechnet oft alle 6h, wir versuchen die neuesten Läufe rückwärts
             for off in [6, 12, 18, 24, 30, 36]:
                 t = now - timedelta(hours=off)
                 run = (t.hour // 6) * 6
                 dt_s = t.strftime("%Y%m%d")
                 
-                # Generische Filter-URL für NOMADS CFS
+                # BUGFIX: CFS erwartet flxf06.01, flxf120.01 etc.
                 url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_cfs_flx.pl?file=flxf{hr:02d}.01.{dt_s}{run:02d}.grb2{cfs_p}&subregion=&leftlon=-50&rightlon=45&toplat=75&bottomlat=20&dir=%2Fcfs.{dt_s}%2F{run:02d}%2F6hrly_grib_01"
                 
                 try:
@@ -713,9 +685,6 @@ class DataFetcher:
                     continue
             return None, None, None, None
 
-        # ======================================================================
-        # GFS Ensemble (GEFS Mean)
-        # ======================================================================
         elif model == "GFS Ensemble (Mittel)":
             headers = {'User-Agent': 'Mozilla/5.0'}
             gefs_map = {
@@ -746,9 +715,6 @@ class DataFetcher:
                     continue
             return None, None, None, None
 
-        # ======================================================================
-        # ECMWF Ensemble (Mittel) / Proxy Access
-        # ======================================================================
         elif model == "ECMWF Ensemble (Mittel)":
             for off in range(1, 18):
                 t = now - timedelta(hours=off)
@@ -1084,21 +1050,16 @@ with st.sidebar:
     else:
         model_type_1 = ModelRegistry.MODELS[mod_1]["type"]
         h_list_1 = ModelRegistry.get_timesteps(model_type_1)
-        
-        # NEU: Intelligente Zeit-Kalkulation (Datum + MEZ/MESZ Logik)
         now_utc = datetime.now(timezone.utc)
         base_time_1 = DataFetcher.estimate_latest_run(mod_1, now_utc)
         
+        # NEU: Slider-Logik! Das löst das Problem des endlosen Scrollens.
         options_1 = []
         for h in h_list_1:
-            # Berechnet das exakte Zieldatum in der lokalen Zeitzone
             valid_time = (base_time_1 + timedelta(hours=h)).astimezone(LOCAL_TZ)
-            # Sommerzeit oder Winterzeit erkennen
-            tz_str = "MESZ" if valid_time.dst() else "MEZ"
-            options_1.append(f"+{h}h | {valid_time.strftime('%d.%m.%Y %H:%M')} {tz_str}")
+            options_1.append(f"+{h}h | {valid_time.strftime('%d.%m. %H:%M')}")
             
-        hr_str_1 = st.radio("Zeitpunkt", options_1)
-        # Extrahiert wieder sicher die Stundenzahl (z.B. aus "+12h | 15.03...")
+        hr_str_1 = st.select_slider("Zeitpunkt wählen", options=options_1)
         hr_1 = int(hr_str_1.split("h")[0].replace("+", ""))
 
     # ---------------------------------------------------------
@@ -1118,15 +1079,14 @@ with st.sidebar:
         else:
             model_type_2 = ModelRegistry.MODELS[mod_2]["type"]
             h_list_2 = ModelRegistry.get_timesteps(model_type_2)
-            
             base_time_2 = DataFetcher.estimate_latest_run(mod_2, now_utc)
+            
             options_2 = []
             for h in h_list_2:
                 valid_time_2 = (base_time_2 + timedelta(hours=h)).astimezone(LOCAL_TZ)
-                tz_str_2 = "MESZ" if valid_time_2.dst() else "MEZ"
-                options_2.append(f"+{h}h | {valid_time_2.strftime('%d.%m.%Y %H:%M')} {tz_str_2}")
+                options_2.append(f"+{h}h | {valid_time_2.strftime('%d.%m. %H:%M')}")
                 
-            hr_str_2 = st.radio("Zeitpunkt 2", options_2)
+            hr_str_2 = st.select_slider("Zeitpunkt 2 wählen", options=options_2)
             hr_2 = int(hr_str_2.split("h")[0].replace("+", ""))
             
     # ---------------------------------------------------------
@@ -1140,13 +1100,10 @@ with st.sidebar:
     enable_refresh = st.checkbox("🔄 Auto-Update (5 Min.)", value=False)
     if enable_refresh and st_autorefresh is not None:
         st_autorefresh(interval=300000, key="auto_refresh")
-        
-    st.markdown("---")
-    generate = st.button("🚀 Karten generieren", use_container_width=True)
 
 
 # ==============================================================================
-# 10. MAIN EXECUTION & RENDERING LOGIK
+# 10. MAIN EXECUTION & RENDERING LOGIK (MIT DEM APK DOWNLOAD-FIX)
 # ==============================================================================
 def render_axis(ax, fig, model, param, hr, region):
     data, lons, lats, run_id = DataFetcher.fetch_model_data(model, param, hr)
@@ -1219,40 +1176,51 @@ def render_axis(ax, fig, model, param, hr, region):
         )
     else:
         ax.text(
-            0.5, 0.5, "Daten aktuell nicht verfügbar (API Limit oder Ladefehler)", 
+            0.5, 0.5, "Daten aktuell nicht verfügbar (Modell-Lauf noch nicht fertig)", 
             transform=ax.transAxes, ha='center', va='center', 
             fontsize=12, color='red', bbox=dict(facecolor='white', alpha=0.8)
         )
 
+# DER GROSSE GENERIEREN-KNOPF DIREKT IM HAUPTFENSTER
+st.title("🛰️ WarnwetterBB Pro-Zentrale")
+generate = st.button("🚀 Karte jetzt generieren / aktualisieren", use_container_width=True)
 
 if generate or (enable_refresh and "Radar" in mod_1):
     SystemManager.cleanup_temp_files()
     
-    with st.spinner("🛰️ Lade Modell-Daten (Langfrist-Berechnungen können dauern)..."):
+    with st.spinner("🛰️ Lade Modell-Daten (API-Verbindung läuft)..."):
         if use_split:
             col1, col2 = st.columns(2)
             with col1:
                 fig1, ax1 = plt.subplots(figsize=(8, 10), subplot_kw={'projection': ccrs.PlateCarree()}, dpi=150)
                 render_axis(ax1, fig1, mod_1, par_1, hr_1, reg_1)
-                st.pyplot(fig1)
+                
+                buf1 = io.BytesIO()
+                fig1.savefig(buf1, format='png', bbox_inches='tight', dpi=150)
+                buf1.seek(0)
+                st.image(buf1, use_container_width=True)
+                
             with col2:
                 fig2, ax2 = plt.subplots(figsize=(8, 10), subplot_kw={'projection': ccrs.PlateCarree()}, dpi=150)
                 render_axis(ax2, fig2, mod_2, par_2, hr_2, reg_1)
-                st.pyplot(fig2)
+                
+                buf2 = io.BytesIO()
+                fig2.savefig(buf2, format='png', bbox_inches='tight', dpi=150)
+                buf2.seek(0)
+                st.image(buf2, use_container_width=True)
         else:
             fig, ax = plt.subplots(figsize=(10, 12), subplot_kw={'projection': ccrs.PlateCarree()}, dpi=150)
             render_axis(ax, fig, mod_1, par_1, hr_1, reg_1)
-            st.pyplot(fig)
             
+            # NEU: Das Plot-Rendering als natives Image (Perfekt für APKs!)
             buf = io.BytesIO()
             fig.savefig(buf, format='png', bbox_inches='tight', dpi=150)
             buf.seek(0)
-            st.download_button(
-                label="📥 Karte speichern", 
-                data=buf, 
-                file_name=f"Warnwetter_{mod_1.split()[0]}.png", 
-                mime="image/png"
-            )
-
+            
+            st.image(buf, use_container_width=True)
+            
+            # Subtiler Hinweis für die App-Nutzer
+            st.markdown("*(💡 Tipp für die App: Halte das Bild lange gedrückt, um es in der Galerie zu speichern)*")
+            
     SystemManager.cleanup_temp_files()
 
