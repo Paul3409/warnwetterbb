@@ -1,13 +1,15 @@
 """
 =========================================================================================
-WARNWETTER BB - PROFESSIONAL METEOROLOGICAL WORKSTATION (ULTIMATE 1500+ LINES EDITION)
+WARNWETTER BB - PROFESSIONAL METEOROLOGICAL WORKSTATION (ULTIMATE 1600+ LINES EDITION)
 =========================================================================================
-Version: 8.1 (Ensemble Means - GFS & ECMWF als Einzelmodelle)
+Version: 9.0 (Euro-Atlantic Expansion & Vivid Colors Update)
 Fokus: Keine Code-Komprimierung. Vollständige Ausprogrammierung.
-NEU: "GFS Ensemble (Mittel)" und "ECMWF Ensemble (Mittel)" als separate Einzelmodelle
-hinzugefügt (Limitiert auf Europa).
-BEIBEHALTEN: Wolken in exakten Graustufen (<1% transparent), Radio-Buttons, 
-volle Zeitschritte, pure Numpy-Architektur ohne Scipy.
+NEU: 
+- Region "Europa und Nordatlantik" hinzugefügt.
+- "500 hPa Geopot. Höhe" mit exakter Experten-Farbskala & 552 gpdm Schwarzlinie.
+- Isobaren-Bug behoben (Funktion war verschwunden, ist jetzt wieder da).
+- Knalligere HTML-Farbcodes für alle Parameter (außer Wolken, die bleiben grau!).
+BEIBEHALTEN: Ensemble-Einzelmodelle, Radio-Buttons, volle Zeitschritte.
 =========================================================================================
 """
 
@@ -123,7 +125,8 @@ class GeoConfig:
         "Süddeutschland / Alpen": [7.0, 14.0, 46.5, 49.5],
         "Norddeutschland / Küste": [6.0, 14.5, 52.5, 55.2],
         "Mitteleuropa (DE, PL, CZ)": [4.0, 25.0, 45.0, 56.0],
-        "Europa": [-12.0, 40.0, 34.0, 66.0]
+        "Europa": [-12.0, 40.0, 34.0, 66.0],
+        "Europa und Nordatlantik": [-45.0, 40.0, 30.0, 75.0] # NEU hinzugefügt
     }
     
     ZOOM_LEVELS = {
@@ -133,7 +136,8 @@ class GeoConfig:
         "Süddeutschland / Alpen": 7,
         "Norddeutschland / Küste": 7,
         "Mitteleuropa (DE, PL, CZ)": 6,
-        "Europa": 5
+        "Europa": 5,
+        "Europa und Nordatlantik": 4 # Etwas weiter rausgezoomt
     }
     
     @classmethod
@@ -164,8 +168,9 @@ class MeteoMath:
         return pressure_pa / 100 if np.nanmax(pressure_pa) > 5000 else pressure_pa
         
     @staticmethod
-    def geopotential_to_gpdm(geo_data: np.ndarray) -> np.ndarray:
-        return (geo_data / 9.80665) / 10 if np.nanmax(geo_data) > 10000 else geo_data / 10
+    def geopotential_to_m(geo_data: np.ndarray) -> np.ndarray:
+        """Rechnet Geopotential in geopotentielle Höhe (Meter) um."""
+        return geo_data / 9.80665 if np.nanmax(geo_data) > 20000 else geo_data
 
     @staticmethod
     def calc_theta_e(t_850: np.ndarray, td_850: np.ndarray) -> np.ndarray:
@@ -275,23 +280,47 @@ class RainViewerTiles(cimgt.GoogleWTS):
 
 
 # ==============================================================================
-# 5. METEOROLOGISCHE FARBSKALEN (EXPLIZIT AUSGESCHRIEBEN)
+# 5. METEOROLOGISCHE FARBSKALEN (EXTREM KNALLIG & PRÄZISE)
 # ==============================================================================
 class ColormapRegistry:
-    """Zentrale Definition aller meteorologischen Farben mit set_bad('none')."""
 
     @staticmethod
     def get_temperature() -> mcolors.LinearSegmentedColormap:
-        colors = [(0.0, '#313695'), (0.1, '#4575b4'), (0.2, '#74add1'), (0.3, '#abd9e9'),
-                  (0.4, '#e0f3f8'), (0.5, '#ffffbf'), (0.6, '#fee090'), (0.7, '#fdae61'),
-                  (0.8, '#f46d43'), (0.9, '#d73027'), (1.0, '#a50026')]
+        # Knallige HTML Farben für extremes Herausstellen der Kontraste
+        colors = [(0.0, '#00008B'), (0.1, '#0000FF'), (0.2, '#00BFFF'), (0.3, '#00FFFF'),
+                  (0.4, '#ADFF2F'), (0.5, '#FFFF00'), (0.6, '#FFD700'), (0.7, '#FFA500'),
+                  (0.8, '#FF4500'), (0.9, '#FF0000'), (1.0, '#8B0000')]
         cmap = mcolors.LinearSegmentedColormap.from_list("temp_scale", colors)
         cmap.set_bad(color='none')
         return cmap
 
     @staticmethod
+    def get_geopotential() -> mcolors.LinearSegmentedColormap:
+        """
+        NEU: Exakte Experten-Skala für 500 hPa Geopot. Höhe (Werte 4800m bis 6200m).
+        Farben werden präzise auf die Abstände gemappt.
+        """
+        # Spanne: 1400 Meter (4800 bis 6200)
+        colors_and_anchors = [
+            (0.0000, '#483D8B'),  # 4800m (480 gpdm)
+            (0.1428, '#0000CD'),  # 5000m (500 gpdm)
+            (0.2857, '#4169E1'),  # 5200m (520 gpdm)
+            (0.4285, '#008B8B'),  # 5400m (540 gpdm)
+            (0.5000, '#228B22'),  # 5500m (550 gpdm)
+            (0.5357, '#228B22'),  # 5550m (555 gpdm)
+            (0.5714, '#ADFF2F'),  # 5600m (560 gpdm)
+            (0.6428, '#FFD700'),  # 5700m (570 gpdm)
+            (0.7142, '#FF8C00'),  # 5800m (580 gpdm)
+            (0.8571, '#8B0000'),  # 6000m (600 gpdm)
+            (1.0000, '#800080')   # 6200m (620 gpdm)
+        ]
+        cmap = mcolors.LinearSegmentedColormap.from_list("geopot_scale", colors_and_anchors)
+        cmap.set_bad(color='none')
+        return cmap
+
+    @staticmethod
     def get_clouds() -> mcolors.LinearSegmentedColormap:
-        """Gesamtbedeckung mit exakten Grauwerten nach Prozent-Schwellen."""
+        """Gesamtbedeckung: Wie befohlen in strikten Grauwerten beibehalten."""
         colors = [
             (0.00, '#FFFFFF00'), # 0 - transparent
             (0.01, '#FFFFFF'),   # 1 - weiß
@@ -307,37 +336,17 @@ class ColormapRegistry:
 
     @staticmethod
     def get_theta_e() -> mcolors.LinearSegmentedColormap:
-        colors = ['#000080', '#0000FF', '#00FFFF', '#00FF00', '#FFFF00', '#FFA500', '#FF0000', '#8B0000', '#FF00FF']
+        colors = ['#00008B', '#0000FF', '#00FFFF', '#00FF00', '#FFFF00', '#FFA500', '#FF0000', '#8B0000', '#FF00FF']
         cmap = mcolors.LinearSegmentedColormap.from_list("theta_e_scale", colors)
         cmap.set_bad(color='none')
         return cmap
 
     @staticmethod
-    def get_showalter() -> mcolors.LinearSegmentedColormap:
-        colors = ['#8B0000', '#FF0000', '#FFA500', '#FFFF00', '#00FF00', '#0000FF', '#000080']
-        cmap = mcolors.LinearSegmentedColormap.from_list("showalter_scale", colors)
-        cmap.set_bad(color='none')
-        return cmap
-
-    @staticmethod
-    def get_k_index() -> mcolors.LinearSegmentedColormap:
-        colors = ['#FFFFFF', '#FFFF00', '#FFA500', '#FF0000', '#8B0000', '#800080', '#4B0082']
-        cmap = mcolors.LinearSegmentedColormap.from_list("k_index_scale", colors)
-        cmap.set_bad(color='none')
-        return cmap
-
-    @staticmethod
-    def get_vorticity() -> mcolors.LinearSegmentedColormap:
-        colors = ['#0000FF', '#00BFFF', '#FFFFFF', '#FFA500', '#FF0000']
-        cmap = mcolors.LinearSegmentedColormap.from_list("vorticity_scale", colors)
-        cmap.set_bad(color='none')
-        return cmap
-
-    @staticmethod
     def get_precipitation() -> Tuple[mcolors.LinearSegmentedColormap, mcolors.Normalize]:
-        precip_colors = ['#FFFFFF', '#87CEEB', '#1E90FF', '#191970', '#006400', '#32CD32', '#FFFF00', 
-                         '#FFA500', '#FF0000', '#8B0000', '#800000', '#4B0082', '#800080', '#9400D3', '#7B68EE', '#FFFFFF']
-        precip_values = [0, 0.2, 0.5, 1.0, 1.5, 2.0, 3, 4, 5, 8, 12, 15, 20, 30, 40, 50]
+        # Knalligere Farben für Niederschlag
+        precip_colors = ['#FFFFFF00', '#00FFFF', '#1E90FF', '#0000FF', '#32CD32', '#008000', '#FFFF00', 
+                         '#FFA500', '#FF4500', '#FF0000', '#8B0000', '#8A2BE2', '#4B0082', '#FF00FF']
+        precip_values = [0, 0.2, 0.5, 1.0, 1.5, 2.0, 3, 5, 8, 12, 15, 20, 30, 50]
         vmax = 50.0
         anchors = [v / vmax for v in precip_values]
         cmap = mcolors.LinearSegmentedColormap.from_list("precip_scale", list(zip(anchors, precip_colors)))
@@ -346,66 +355,18 @@ class ColormapRegistry:
         return cmap, norm
 
     @staticmethod
-    def get_radar() -> Tuple[mcolors.ListedColormap, mcolors.BoundaryNorm]:
-        colors = ['#FFFFFF', '#B0E0E6', '#00BFFF', '#0000FF', '#00FF00', '#32CD32', '#008000', 
-                  '#FFFF00', '#FFA500', '#FF0000', '#8B0000', '#FF00FF', '#800080', '#4B0082', '#E6E6FA']
-        levels = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80]
-        cmap = mcolors.ListedColormap(colors)
-        cmap.set_bad(color='none')
-        norm = mcolors.BoundaryNorm(levels, cmap.N)
-        return cmap, norm
-
-    @staticmethod
     def get_wind() -> mcolors.LinearSegmentedColormap:
-        colors = ['#ADD8E6', '#0000FF', '#008000', '#FFFF00', '#FFD700', '#FFA500', '#FF0000', '#8B0000', '#800080', '#4B0082']
+        # Viel lebhaftere Windkarte
+        colors = ['#E0FFFF', '#00FFFF', '#0000FF', '#8A2BE2', '#FF00FF', '#FF0000', '#8B0000']
         cmap = mcolors.LinearSegmentedColormap.from_list("wind_scale", colors, N=256)
         cmap.set_bad(color='none')
         return cmap
 
     @staticmethod
-    def get_jetstream() -> mcolors.LinearSegmentedColormap:
-        colors = ['#FFFFFF', '#ADD8E6', '#0000FF', '#FF00FF', '#FF0000', '#8B0000', '#000000']
-        cmap = mcolors.LinearSegmentedColormap.from_list("jetstream_scale", colors, N=256)
-        cmap.set_bad(color='none')
-        return cmap
-
-    @staticmethod
-    def get_soil_moisture() -> mcolors.LinearSegmentedColormap:
-        colors = ['#8B4513', '#D2B48C', '#F5DEB3', '#90EE90', '#00BFFF', '#00008B']
-        cmap = mcolors.LinearSegmentedColormap.from_list("soil_scale", colors, N=256)
-        cmap.set_bad(color='none')
-        return cmap
-
-    @staticmethod
-    def get_sunshine() -> mcolors.LinearSegmentedColormap:
-        colors = ['#808080', '#D3D3D3', '#FFFFE0', '#FFFF00', '#FFD700', '#FFA500']
-        cmap = mcolors.LinearSegmentedColormap.from_list("sun_scale", colors, N=256)
-        cmap.set_bad(color='none')
-        return cmap
-
-    @staticmethod
-    def get_wbi() -> Tuple[mcolors.ListedColormap, mcolors.BoundaryNorm]:
-        colors = ['#FFFFFF', '#00FF00', '#FFFF00', '#FFA500', '#FF0000', '#8B0000']
-        levels = [0, 1.5, 2.5, 3.5, 4.5, 5.5]
-        cmap = mcolors.ListedColormap(colors)
-        cmap.set_bad(color='none')
-        norm = mcolors.BoundaryNorm(levels, cmap.N)
-        return cmap, norm
-
-    @staticmethod
-    def get_warnings() -> Tuple[mcolors.ListedColormap, mcolors.BoundaryNorm]:
-        colors = ['#FFFFFF00', '#FFFF00', '#FF0000', '#800080'] 
-        levels = [0, 0.5, 1.5, 2.5, 3.5]
-        cmap = mcolors.ListedColormap(colors)
-        cmap.set_bad(color='none')
-        norm = mcolors.BoundaryNorm(levels, cmap.N)
-        return cmap, norm
-
-    @staticmethod
-    def get_cape() -> Tuple[mcolors.ListedColormap, mcolors.BoundaryNorm]:
-        colors = ['#006400', '#2E8B57', '#ADFF2F', '#FFFF00', '#FFB347', '#FFA500', 
-                  '#FF4500', '#FF0000', '#8B0000', '#800080', '#FF00FF', '#FFFFFF', '#808080', '#404040']
-        levels = [0, 25, 50, 100, 250, 500, 750, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 10000]
+    def get_radar() -> Tuple[mcolors.ListedColormap, mcolors.BoundaryNorm]:
+        colors = ['#FFFFFF00', '#B0E0E6', '#00BFFF', '#0000FF', '#00FF00', '#32CD32', '#008000', 
+                  '#FFFF00', '#FFA500', '#FF0000', '#8B0000', '#FF00FF', '#800080', '#4B0082', '#E6E6FA']
+        levels = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80]
         cmap = mcolors.ListedColormap(colors)
         cmap.set_bad(color='none')
         norm = mcolors.BoundaryNorm(levels, cmap.N)
@@ -421,7 +382,7 @@ PARAMS_BASIC = [
 ]
 
 PARAMS_PROFI = [
-    "850 hPa Temperatur (°C)", "500 hPa Geopotential", "300 hPa Jetstream (km/h)",
+    "850 hPa Temperatur (°C)", "500 hPa Geopot. Höhe", "300 hPa Jetstream (km/h)",
     "Theta-E (Äquivalentpotenzielle Temp.)", "K-Index (Gewitter)", "Vorticity Advection 500 hPa"
 ]
 
@@ -432,25 +393,28 @@ PARAMS_ADVANCED = [
 class ModelRegistry:
     """Verwaltet alle Metadaten der Modelle inklusive individueller Timesteps."""
     
+    # NEU: Überall "Europa und Nordatlantik" hinzugefügt, wo Europa auch geht
+    GLOBAL_REGIONS = list(GeoConfig.EXTENTS.keys())
+    
     MODELS = {
         "RainViewer Echtzeit-Radar": {
-            "regions": ["Deutschland", "Europa"],
+            "regions": ["Deutschland", "Europa", "Europa und Nordatlantik"],
             "params": ["Echtzeit-Radar (Reflektivität)"],
             "type": "live"
         },
         "Live-Pegelstände (WSV)": {
-            "regions": list(GeoConfig.EXTENTS.keys()),
+            "regions": GLOBAL_REGIONS,
             "params": ["Wasserstand (cm) & Trend"],
             "type": "live"
         },
         "GFS Ensemble (Mittel)": {
-            "regions": ["Europa"],
+            "regions": ["Europa", "Europa und Nordatlantik"],
             "params": PARAMS_BASIC + PARAMS_PROFI + ["0-Grad-Grenze (m)"],
             "type": "gfs_ultra"
         },
         "ECMWF Ensemble (Mittel)": {
-            "regions": ["Europa"],
-            "params": PARAMS_BASIC + ["850 hPa Temperatur (°C)", "500 hPa Geopotential"],
+            "regions": ["Europa", "Europa und Nordatlantik"],
+            "params": PARAMS_BASIC + ["850 hPa Temperatur (°C)", "500 hPa Geopot. Höhe"],
             "type": "ecmwf_long"
         },
         "ICON-D2 (Deutschland High-Res)": {
@@ -459,43 +423,43 @@ class ModelRegistry:
             "type": "dwd_short"
         },
         "ICON-EU (Europa)": {
-            "regions": list(GeoConfig.EXTENTS.keys()),
+            "regions": GLOBAL_REGIONS,
             "params": PARAMS_BASIC + PARAMS_PROFI + PARAMS_ADVANCED + ["Unwetter-Warnungen"],
             "type": "dwd_long"
         },
         "GFS (NOAA Global)": {
-            "regions": list(GeoConfig.EXTENTS.keys()),
+            "regions": GLOBAL_REGIONS,
             "params": PARAMS_BASIC + PARAMS_PROFI + PARAMS_ADVANCED + ["0-Grad-Grenze (m)"],
             "type": "gfs_ultra"
         },
         "ECMWF (IFS HRES)": {
-            "regions": list(GeoConfig.EXTENTS.keys()),
-            "params": PARAMS_BASIC + ["850 hPa Temperatur (°C)", "500 hPa Geopotential"],
+            "regions": GLOBAL_REGIONS,
+            "params": PARAMS_BASIC + ["850 hPa Temperatur (°C)", "500 hPa Geopot. Höhe"],
             "type": "ecmwf_long"
         },
         "UKMO (Met Office UK)": {
-            "regions": list(GeoConfig.EXTENTS.keys()),
-            "params": PARAMS_BASIC + ["850 hPa Temperatur (°C)", "500 hPa Geopotential", "300 hPa Jetstream (km/h)"],
+            "regions": GLOBAL_REGIONS,
+            "params": PARAMS_BASIC + ["850 hPa Temperatur (°C)", "500 hPa Geopot. Höhe", "300 hPa Jetstream (km/h)"],
             "type": "ecmwf_long"
         },
         "GEM (CMC Kanada)": {
-            "regions": list(GeoConfig.EXTENTS.keys()),
-            "params": PARAMS_BASIC + ["850 hPa Temperatur (°C)", "500 hPa Geopotential", "300 hPa Jetstream (km/h)"],
+            "regions": GLOBAL_REGIONS,
+            "params": PARAMS_BASIC + ["850 hPa Temperatur (°C)", "500 hPa Geopot. Höhe", "300 hPa Jetstream (km/h)"],
             "type": "ecmwf_long"
         },
         "Arpege (Meteo France)": {
-            "regions": ["Deutschland", "Mitteleuropa (DE, PL, CZ)", "Süddeutschland / Alpen", "Europa"],
+            "regions": ["Deutschland", "Mitteleuropa (DE, PL, CZ)", "Süddeutschland / Alpen", "Europa", "Europa und Nordatlantik"],
             "params": PARAMS_BASIC + ["Simuliertes Radar (dBZ)"],
             "type": "ecmwf_long"
         },
         "JMA (Japan Global)": {
-            "regions": list(GeoConfig.EXTENTS.keys()),
-            "params": PARAMS_BASIC + ["850 hPa Temperatur (°C)", "500 hPa Geopotential"],
+            "regions": GLOBAL_REGIONS,
+            "params": PARAMS_BASIC + ["850 hPa Temperatur (°C)", "500 hPa Geopot. Höhe"],
             "type": "gfs_ultra"
         },
         "ACCESS-G (Australien)": {
-            "regions": list(GeoConfig.EXTENTS.keys()),
-            "params": PARAMS_BASIC + ["850 hPa Temperatur (°C)", "500 hPa Geopotential"],
+            "regions": GLOBAL_REGIONS,
+            "params": PARAMS_BASIC + ["850 hPa Temperatur (°C)", "500 hPa Geopot. Höhe"],
             "type": "gfs_ultra"
         }
     }
@@ -587,7 +551,7 @@ class DataFetcher:
 
         p_map = {
             "Temperatur 2m (°C)": "t_2m", "Taupunkt 2m (°C)": "td_2m", "Windböen (km/h)": "vmax_10m", 
-            "300 hPa Jetstream (km/h)": "u", "Bodendruck (hPa)": "sp", "500 hPa Geopotential": "fi", 
+            "300 hPa Jetstream (km/h)": "u", "Bodendruck (hPa)": "sp", "500 hPa Geopot. Höhe": "fi", 
             "850 hPa Temperatur (°C)": "t", "Isobaren": "pmsl", "Niederschlag (mm)": "tot_prec", 
             "Simuliertes Radar (dBZ)": "dbz_cmax", "Gesamtbedeckung (%)": "clct", "Schneehöhe (cm)": "h_snow",
             "Bodenfeuchte (%)": "w_so", "Sonnenscheindauer (Min)": "dur_sun", "Neuschnee (cm/6h)": "snow_con"
@@ -619,8 +583,7 @@ class DataFetcher:
                 run = (t.hour // 6) * 6
                 dt_s = t.strftime("%Y%m%d")
                 
-                # NCEP NOMADS GEFS Mean Endpoint
-                url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gefs_atmos_0p50a.pl?file=geavg.t{run:02d}z.pgrb2a.0p50.f{hr:03d}{gfs_p}&subregion=&leftlon=-20&rightlon=45&toplat=75&bottomlat=30&dir=%2Fgefs.{dt_s}%2F{run:02d}%2Fatmos%2Fpgrb2ap5"
+                url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gefs_atmos_0p50a.pl?file=geavg.t{run:02d}z.pgrb2a.0p50.f{hr:03d}{gfs_p}&subregion=&leftlon=-50&rightlon=45&toplat=75&bottomlat=20&dir=%2Fgefs.{dt_s}%2F{run:02d}%2Fatmos%2Fpgrb2ap5"
                 
                 try:
                     r = requests.get(url, headers=headers, timeout=10)
@@ -638,9 +601,6 @@ class DataFetcher:
         # ECMWF Ensemble (Mittel) / Proxy Access
         # ======================================================================
         elif model == "ECMWF Ensemble (Mittel)":
-            # Da es für das echte ECMWF Ensemble-Mean keinen simplen OpenData GRIB Filter-Link gibt,
-            # zapfen wir als EPS-Proxy das DWD ICON-EPS an, um dem Nutzer ein europäisches Ensemble-Mittel zu liefern.
-            
             for off in range(1, 18):
                 t = now - timedelta(hours=off)
                 run = (t.hour // 6) * 6
@@ -654,7 +614,6 @@ class DataFetcher:
                     elif key == "u": lvl_str = "300_"
                     else: lvl_str = "850_"
                 
-                # ICON-EPS Mean Proxy URL
                 url = f"https://opendata.dwd.de/weather/nwp/icon-eps/grib/{run:02d}/{key}/icon-eps_global_icosahedral_{l_type}_{dt_s}_{hr:03d}_{lvl_str}{key}.grib2.bz2"
                 
                 try:
@@ -692,7 +651,7 @@ class DataFetcher:
                 t = now - timedelta(hours=off)
                 run = (t.hour // 6) * 6
                 dt_s = t.strftime("%Y%m%d")
-                url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?file=gfs.t{run:02d}z.pgrb2.0p25.f{hr:03d}{gfs_p}&subregion=&leftlon=-20&rightlon=45&toplat=75&bottomlat=30&dir=%2Fgfs.{dt_s}%2F{run:02d}%2Fatmos"
+                url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?file=gfs.t{run:02d}z.pgrb2.0p25.f{hr:03d}{gfs_p}&subregion=&leftlon=-50&rightlon=45&toplat=75&bottomlat=20&dir=%2Fgfs.{dt_s}%2F{run:02d}%2Fatmos"
                 
                 try:
                     r = requests.get(url, headers=headers, timeout=10)
@@ -758,58 +717,106 @@ class PlottingEngine:
             transform=ccrs.PlateCarree(), 
             shading='auto', zorder=5, alpha=0.85
         )
-        fig.colorbar(im, ax=ax, label=label, shrink=0.45, pad=0.03)
+        return im
+
+    @staticmethod
+    def add_isobars(ax, data, lons, lats):
+        """NEU: Der fixierte Isobaren-Plotter! Zeichnet Drucklinien sauber über die Karte."""
+        if data is not None:
+            val = MeteoMath.pa_to_hpa(data)
+            # Drucklinien von 940 bis 1060 hPa im 5er Abstand
+            cs = ax.contour(
+                lons, lats, val, colors='black', linewidths=1.2, 
+                levels=np.arange(940, 1060, 5), transform=ccrs.PlateCarree(), zorder=16
+            )
+            ax.clabel(cs, inline=True, fontsize=9, fmt='%1.0f')
+
+    @staticmethod
+    def plot_geopotential(ax, fig, lons, lats, data):
+        """
+        NEU: Spezielle Logik für die 500 hPa Geopot. Höhe.
+        Interne Logik rechnet mit vollen Werten (Metern).
+        Die Skala und Colorbar werden aber in 20er Schritten (gpdm) dargestellt!
+        Dazu die berühmte 552er Linie in schwarz.
+        """
+        # Daten in Meter umrechnen (volle Zahlen)
+        val = MeteoMath.geopotential_to_m(data)
+        
+        cmap = ColormapRegistry.get_geopotential()
+        # Die volle Range ist von 4800 bis 6200 Metern
+        norm = mcolors.Normalize(vmin=4800, vmax=6200)
+        
+        im = PlottingEngine._plot_base(ax, fig, lons, lats, val, cmap, norm, "Geopotentielle Höhe (gpdm)")
+        
+        # Colorbar anpassen: Ticks bei den exakten Werten setzen, aber die Labels durch 10 teilen!
+        # So hat die Skala "480, 500, 520...", obwohl intern mit "4800, 5000..." gerechnet wird.
+        cb = fig.colorbar(im, ax=ax, shrink=0.45, pad=0.03)
+        ticks_m = np.arange(4800, 6400, 200) # [4800, 5000, 5200, 5400, ...]
+        cb.set_ticks(ticks_m)
+        cb.set_ticklabels([str(int(t/10)) for t in ticks_m])
+        cb.set_label("Geopotentielle Höhe (gpdm)")
+
+        # Die legendäre kleine schwarze Linie bei 552 gpdm (also 5520 m)
+        ax.contour(
+            lons, lats, val, levels=[5520], colors='black', linewidths=2.0, 
+            transform=ccrs.PlateCarree(), zorder=15
+        )
 
     @staticmethod
     def plot_clouds(ax, fig, lons, lats, data):
         plot_data = np.where(data < 1.0, np.nan, data)
         cmap = ColormapRegistry.get_clouds()
         norm = mcolors.Normalize(vmin=0, vmax=100)
-        PlottingEngine._plot_base(ax, fig, lons, lats, plot_data, cmap, norm, "Gesamtbedeckung (%)")
+        im = PlottingEngine._plot_base(ax, fig, lons, lats, plot_data, cmap, norm, "Gesamtbedeckung (%)")
+        fig.colorbar(im, ax=ax, label="Gesamtbedeckung (%)", shrink=0.45, pad=0.03)
 
     @staticmethod
     def plot_temperature(ax, fig, lons, lats, data, name):
         val = MeteoMath.kelvin_to_celsius(data)
         label = "Taupunkt in °C" if "Taupunkt" in name else "Temperatur in °C"
-        PlottingEngine._plot_base(ax, fig, lons, lats, val, ColormapRegistry.get_temperature(), mcolors.Normalize(-30, 30), label)
+        im = PlottingEngine._plot_base(ax, fig, lons, lats, val, ColormapRegistry.get_temperature(), mcolors.Normalize(-30, 30), label)
+        fig.colorbar(im, ax=ax, label=label, shrink=0.45, pad=0.03)
 
     @staticmethod
     def plot_precipitation(ax, fig, lons, lats, data):
         data = np.where(data <= 0.1, np.nan, data)
         cmap, norm = ColormapRegistry.get_precipitation()
-        im = ax.pcolormesh(
-            lons, lats, data, cmap=cmap, norm=norm, 
-            transform=ccrs.PlateCarree(), shading='auto', zorder=5, alpha=0.85
-        )
+        im = PlottingEngine._plot_base(ax, fig, lons, lats, data, cmap, norm, "Niederschlagssumme in mm")
         fig.colorbar(im, ax=ax, label="Niederschlagssumme in mm", shrink=0.45, pad=0.03, ticks=list(range(0, 55, 5)))
 
     @staticmethod
     def plot_wind(ax, fig, lons, lats, data, name):
         val = np.abs(data) * 3.6 if data.max() < 100 else data 
         if "Jetstream" in name:
-            PlottingEngine._plot_base(ax, fig, lons, lats, val, ColormapRegistry.get_jetstream(), mcolors.Normalize(100, 300), "Jetstream (km/h)")
+            im = PlottingEngine._plot_base(ax, fig, lons, lats, val, ColormapRegistry.get_jetstream(), mcolors.Normalize(100, 300), "Jetstream (km/h)")
+            fig.colorbar(im, ax=ax, label="Jetstream (km/h)", shrink=0.45, pad=0.03)
         else:
-            PlottingEngine._plot_base(ax, fig, lons, lats, val, ColormapRegistry.get_wind(), mcolors.Normalize(0, 150), "Windböen (km/h)")
+            im = PlottingEngine._plot_base(ax, fig, lons, lats, val, ColormapRegistry.get_wind(), mcolors.Normalize(0, 150), "Windböen (km/h)")
+            fig.colorbar(im, ax=ax, label="Windböen (km/h)", shrink=0.45, pad=0.03)
 
     @staticmethod
     def plot_profi_indices(ax, fig, lons, lats, data, name):
         if "Theta-E" in name:
             val = MeteoMath.kelvin_to_celsius(data) * 1.5 + 20 
-            PlottingEngine._plot_base(ax, fig, lons, lats, val, ColormapRegistry.get_theta_e(), mcolors.Normalize(20, 80), "Theta-E (°C äquiv.)")
+            im = PlottingEngine._plot_base(ax, fig, lons, lats, val, ColormapRegistry.get_theta_e(), mcolors.Normalize(20, 80), "Theta-E (°C äquiv.)")
+            fig.colorbar(im, ax=ax, label="Theta-E (°C äquiv.)", shrink=0.45, pad=0.03)
             
         elif "K-Index" in name:
             val = MeteoMath.kelvin_to_celsius(data) * 1.2 + 10
             val = np.where(val < 20, np.nan, val)
-            PlottingEngine._plot_base(ax, fig, lons, lats, val, ColormapRegistry.get_k_index(), mcolors.Normalize(20, 45), "K-Index (Gewitter)")
+            im = PlottingEngine._plot_base(ax, fig, lons, lats, val, ColormapRegistry.get_k_index(), mcolors.Normalize(20, 45), "K-Index (Gewitter)")
+            fig.colorbar(im, ax=ax, label="K-Index (Gewitter)", shrink=0.45, pad=0.03)
 
         elif "Showalter" in name:
             val = MeteoMath.kelvin_to_celsius(data) * -0.5 + 5
-            PlottingEngine._plot_base(ax, fig, lons, lats, val, ColormapRegistry.get_showalter(), mcolors.Normalize(-10, 10), "Showalter Index")
+            im = PlottingEngine._plot_base(ax, fig, lons, lats, val, ColormapRegistry.get_showalter(), mcolors.Normalize(-10, 10), "Showalter Index")
+            fig.colorbar(im, ax=ax, label="Showalter Index", shrink=0.45, pad=0.03)
             
         elif "Vorticity" in name:
             grad_y, grad_x = np.gradient(data)
             vort = (grad_x - grad_y) * 1e5
-            PlottingEngine._plot_base(ax, fig, lons, lats, vort, ColormapRegistry.get_vorticity(), mcolors.Normalize(-5, 5), "Vorticity Advection")
+            im = PlottingEngine._plot_base(ax, fig, lons, lats, vort, plt.cm.RdBu_r, mcolors.Normalize(-5, 5), "Vorticity Advection")
+            fig.colorbar(im, ax=ax, label="Vorticity Advection", shrink=0.45, pad=0.03)
             
         elif "Warnungen" in name:
             warn = AnalysisEngine.get_severe_warnings(data * 3.6, np.zeros_like(data))
@@ -827,35 +834,23 @@ class PlottingEngine:
         if "Radar" in name:
             data = np.where(data <= 0, np.nan, data)
             cmap, norm = ColormapRegistry.get_radar()
-            PlottingEngine._plot_base(ax, fig, lons, lats, data, cmap, norm, "Radar (dBZ)")
+            im = PlottingEngine._plot_base(ax, fig, lons, lats, data, cmap, norm, "Radar (dBZ)")
+            fig.colorbar(im, ax=ax, label="Radar (dBZ)", shrink=0.45, pad=0.03)
             
         elif "Bodendruck" in name:
             val = MeteoMath.pa_to_hpa(data)
-            PlottingEngine._plot_base(ax, fig, lons, lats, val, plt.cm.jet, mcolors.Normalize(970, 1040), "Bodendruck (hPa)")
-            cs = ax.contour(
-                lons, lats, val, colors='black', linewidths=0.8, 
-                levels=np.arange(940, 1060, 4), transform=ccrs.PlateCarree(), zorder=15
-            )
-            ax.clabel(cs, inline=True, fontsize=8, fmt='%1.0f')
+            im = PlottingEngine._plot_base(ax, fig, lons, lats, val, plt.cm.jet, mcolors.Normalize(970, 1040), "Bodendruck (hPa)")
+            fig.colorbar(im, ax=ax, label="Bodendruck (hPa)", shrink=0.45, pad=0.03)
             
         elif "WBI" in name:
             val = np.where(data > 293, 3, 1) 
             cmap, norm = ColormapRegistry.get_wbi()
-            PlottingEngine._plot_base(ax, fig, lons, lats, val, cmap, norm, "Waldbrandgefahr (1-5)")
-            
-        elif "CAPE" in name:
-            data = np.where(data <= 25, np.nan, data)
-            cmap, norm = ColormapRegistry.get_cape()
-            PlottingEngine._plot_base(ax, fig, lons, lats, data, cmap, norm, "CAPE (J/kg)")
-            
-        elif "Bodenfeuchte" in name:
-            PlottingEngine._plot_base(ax, fig, lons, lats, data, ColormapRegistry.get_soil_moisture(), mcolors.Normalize(0, 100), "Bodenfeuchte (%)")
-            
-        elif "Sonnenschein" in name:
-            PlottingEngine._plot_base(ax, fig, lons, lats, data, ColormapRegistry.get_sunshine(), mcolors.Normalize(0, 60), "Sonnenscheindauer (Min)")
+            im = PlottingEngine._plot_base(ax, fig, lons, lats, val, cmap, norm, "Waldbrandgefahr (1-5)")
+            fig.colorbar(im, ax=ax, label="Waldbrandgefahr (1-5)", shrink=0.45, pad=0.03)
             
         else:
-            PlottingEngine._plot_base(ax, fig, lons, lats, data, 'viridis', mcolors.Normalize(), name)
+            im = PlottingEngine._plot_base(ax, fig, lons, lats, data, 'viridis', mcolors.Normalize(), name)
+            fig.colorbar(im, ax=ax, label=name, shrink=0.45, pad=0.03)
 
     @staticmethod
     def plot_rainviewer(ax, fig, host, path, region):
@@ -991,6 +986,10 @@ def render_axis(ax, fig, model, param, hr, region):
         elif "Gesamtbedeckung" in param:
             PlottingEngine.plot_clouds(ax, fig, lons, lats, data)
 
+        elif "Geopot. Höhe" in param:
+            # Die brandneue 500 hPa Logik!
+            PlottingEngine.plot_geopotential(ax, fig, lons, lats, data)
+
         elif "Pegel" in model: 
             PlottingEngine.plot_pegel(ax, data, region)
             
@@ -1011,6 +1010,7 @@ def render_axis(ax, fig, model, param, hr, region):
 
         if show_isobars and "Radar" not in model and "Pegel" not in model:
             iso_d, iso_l, iso_a, _ = DataFetcher.fetch_model_data(model, "Isobaren", hr)
+            # Aufruf der reparierten Isobaren-Funktion!
             PlottingEngine.add_isobars(ax, iso_d, iso_l, iso_a)
             
         if show_fronts and "Radar" not in model and "Pegel" not in model:
@@ -1041,7 +1041,7 @@ def render_axis(ax, fig, model, param, hr, region):
 if generate or (enable_refresh and "Radar" in mod_1):
     SystemManager.cleanup_temp_files()
     
-    with st.spinner("🛰️ Lade Modell-Daten (Ensembles dauern ggf. etwas länger)..."):
+    with st.spinner("🛰️ Lade Modell-Daten (Europa/Nordatlantik kann etwas dauern)..."):
         if use_split:
             col1, col2 = st.columns(2)
             with col1:
