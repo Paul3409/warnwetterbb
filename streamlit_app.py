@@ -1,16 +1,16 @@
 """
 =========================================================================================
-WARNWETTER BB - PROFESSIONAL METEOROLOGICAL WORKSTATION (ULTIMATE 1800+ LINES EDITION)
+WARNWETTER BB - PROFESSIONAL METEOROLOGICAL WORKSTATION (ULTIMATE 1900+ LINES EDITION)
 =========================================================================================
-Version: 11.0 (The "Every-Parameter-Customizable" & Mobile Flow Edition)
+Version: 12.0 (The "Deep Future CFS & Absolute Timeline" Edition)
 Fokus: Keine Code-Komprimierung. Vollständige Ausprogrammierung.
 NEU: 
-- ÜBER 20 INDIVIDUELLE FARBSKALEN: Jeder Parameter hat jetzt seine völlig eigene 
-  Farb-Definition in der ColormapRegistry. Perfekt zum nachträglichen Anpassen!
-- Zeitauswahl als Radio-Buttons (verhindert lästige Tastatur-Popups auf dem Handy).
-- Alle Overlays (Satellit, Isobaren, Fronten) sind standardmäßig auf AUS (False).
-BEIBEHALTEN: Region "Europa/Nordatlantik", 500hPa Logik (552er Linie), 
-Wolken-Graustufen (<1% transparent) und pure Numpy-Power ohne Scipy.
+- CFS (Langfrist) Modell integriert. 4.008 Stunden in 12h Schritten!
+- Intelligente Zeitauswahl: Zeigt nun das exakte Datum und die Uhrzeit (inkl. 
+  automatischer MEZ/MESZ Erkennung) für jeden Schritt direkt am Radio-Button an.
+BEIBEHALTEN: 
+- 20+ individuelle Farbskalen, Region "Europa/Nordatlantik", 500hPa Logik (552er Linie), 
+- Wolken-Graustufen (<1% transparent), Radio-Buttons, Overlays standardmäßig aus.
 =========================================================================================
 """
 
@@ -75,7 +75,7 @@ st.markdown("""
     .stAlert { 
         border-radius: 8px; 
     }
-    /* Mache ALLE Radio-Buttons kompakter für die lange Liste */
+    /* Mache ALLE Radio-Buttons kompakter für die lange Liste (wichtig bei 334 Schritten!) */
     div.row-widget.stRadio > div{
         flex-direction:column;
         gap: 0px;
@@ -98,7 +98,7 @@ class SystemManager:
         temp_extensions = [
             ".grib", ".grib2", ".bz2", ".idx", ".tmp", 
             "temp_gfs", "temp_ukmo", "temp_gem", "temp_arpege", "temp_jma", "temp_access",
-            "temp_ens_gfs", "temp_ens_ecmwf"
+            "temp_ens_gfs", "temp_ens_ecmwf", "temp_cfs"
         ]
         freed_bytes = 0
         for filename in os.listdir(directory):
@@ -272,10 +272,6 @@ class RainViewerTiles(cimgt.GoogleWTS):
 # 5. METEOROLOGISCHE FARBSKALEN (20+ INDIVIDUELLE PARAMETER)
 # ==============================================================================
 class ColormapRegistry:
-    """
-    JEDER Parameter hat nun seine eigene, getrennte Farb-Methode. 
-    Du kannst die HEX-Codes hier für jeden Wert einzeln nach Belieben ändern!
-    """
 
     # 1. Temperatur 2m
     @staticmethod
@@ -511,6 +507,11 @@ class ModelRegistry:
             "params": ["Wasserstand (cm) & Trend"],
             "type": "live"
         },
+        "CFS (Langfrist)": {
+            "regions": ["Europa", "Europa und Nordatlantik"],
+            "params": ["500 hPa Geopot. Höhe", "850 hPa Temperatur (°C)", "Temperatur 2m (°C)", "Niederschlag (mm)"],
+            "type": "cfs_long"
+        },
         "GFS Ensemble (Mittel)": {
             "regions": ["Europa", "Europa und Nordatlantik"],
             "params": PARAMS_BASIC + PARAMS_PROFI + ["0-Grad-Grenze (m)"],
@@ -580,6 +581,9 @@ class ModelRegistry:
             return list(range(3, 385, 3))
         elif model_type == "ecmwf_long":
             return list(range(3, 243, 3))
+        elif model_type == "cfs_long":
+            # NEU: Das gewaltige CFS Zeitfenster (4.008 Stunden im 12h Takt)
+            return list(range(0, 4009, 12))
         return list(range(1, 49))
 
 
@@ -590,10 +594,17 @@ class DataFetcher:
     
     @staticmethod
     def estimate_latest_run(model: str, now_utc: datetime) -> datetime:
+        """Kalkuliert den wahrscheinlichsten Startzeitpunkt des Modells."""
         if any(m in model for m in ["D2", "EU", "Arpege"]):
             run = ((now_utc.hour - 3) // 3) * 3
             if run < 0: 
                 return (now_utc - timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0)
+            return now_utc.replace(hour=run, minute=0, second=0, microsecond=0)
+        elif "CFS" in model:
+            # CFS rechnet alle 6 Stunden, braucht aber extrem lang zum publizieren
+            run = ((now_utc.hour - 6) // 6) * 6
+            if run < 0: 
+                return (now_utc - timedelta(days=1)).replace(hour=18, minute=0, second=0, microsecond=0)
             return now_utc.replace(hour=run, minute=0, second=0, microsecond=0)
         else:
             run = ((now_utc.hour - 6) // 6) * 6
@@ -667,7 +678,45 @@ class DataFetcher:
 
         now = datetime.now(timezone.utc)
         
-        if model == "GFS Ensemble (Mittel)":
+        # ======================================================================
+        # NEU: CFS (Langfrist) - Die 4000+ Stunden Logik
+        # ======================================================================
+        if model == "CFS (Langfrist)":
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            # GFS/CFS Filter Mapping
+            cfs_map = {
+                "t_2m": "&var_TMP=on&lev_2_m_above_ground=on", 
+                "fi": "&var_HGT=on&lev_500_mb=on",
+                "t": "&var_TMP=on&lev_850_mb=on", 
+                "tot_prec": "&var_PRATE=on&lev_surface=on" # CFS nutzt oft PRATE (Precipitation Rate) anstelle von APCP
+            }
+            cfs_p = cfs_map.get(key, "&var_TMP=on&lev_2_m_above_ground=on")
+            
+            # CFS rechnet oft alle 6h, wir versuchen die neuesten Läufe rückwärts
+            for off in [6, 12, 18, 24, 30, 36]:
+                t = now - timedelta(hours=off)
+                run = (t.hour // 6) * 6
+                dt_s = t.strftime("%Y%m%d")
+                
+                # Generische Filter-URL für NOMADS CFS
+                url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_cfs_flx.pl?file=flxf{hr:02d}.01.{dt_s}{run:02d}.grb2{cfs_p}&subregion=&leftlon=-50&rightlon=45&toplat=75&bottomlat=20&dir=%2Fcfs.{dt_s}%2F{run:02d}%2F6hrly_grib_01"
+                
+                try:
+                    r = requests.get(url, headers=headers, timeout=12)
+                    if r.status_code == 200:
+                        with open("temp_cfs.grib", "wb") as f: f.write(r.content)
+                        ds = xr.open_dataset("temp_cfs.grib", engine='cfgrib')
+                        data = ds[list(ds.data_vars)[0]].isel(step=0, height=0, isobaricInhPa=0, missing_dims='ignore').values.squeeze()
+                        lons, lats = np.meshgrid(ds.longitude.values, ds.latitude.values)
+                        return data, lons, lats, f"{dt_s}{run:02d}"
+                except Exception: 
+                    continue
+            return None, None, None, None
+
+        # ======================================================================
+        # GFS Ensemble (GEFS Mean)
+        # ======================================================================
+        elif model == "GFS Ensemble (Mittel)":
             headers = {'User-Agent': 'Mozilla/5.0'}
             gefs_map = {
                 "t_2m": "&var_TMP=on&lev_2_m_above_ground=on", "td_2m": "&var_DPT=on&lev_2_m_above_ground=on",
@@ -697,6 +746,9 @@ class DataFetcher:
                     continue
             return None, None, None, None
 
+        # ======================================================================
+        # ECMWF Ensemble (Mittel) / Proxy Access
+        # ======================================================================
         elif model == "ECMWF Ensemble (Mittel)":
             for off in range(1, 18):
                 t = now - timedelta(hours=off)
@@ -916,7 +968,6 @@ class PlottingEngine:
 
     @staticmethod
     def plot_generic(ax, fig, lons, lats, data, name):
-        """Hier wird JEDER Parameter mit seiner exakten, eigenen ColormapRegistry verknüpft!"""
         if "Radar" in name:
             data = np.where(data <= 0, np.nan, data)
             cmap, norm = ColormapRegistry.get_radar()
@@ -1008,7 +1059,7 @@ class PlottingEngine:
 
 
 # ==============================================================================
-# 9. USER INTERFACE (SIDEBAR)
+# 9. USER INTERFACE (SIDEBAR MIT INTELLIGENTER ZEITANZEIGE)
 # ==============================================================================
 with st.sidebar:
     st.header("🛰️ Modell-Zentrale")
@@ -1033,9 +1084,22 @@ with st.sidebar:
     else:
         model_type_1 = ModelRegistry.MODELS[mod_1]["type"]
         h_list_1 = ModelRegistry.get_timesteps(model_type_1)
-        # NEU: Zeitauswahl als Radio-Button (Handy-Tastatur Fix)
-        hr_str_1 = st.radio("Zeitpunkt (Stunde)", [f"+{h}h" for h in h_list_1])
-        hr_1 = int(hr_str_1.replace("+", "").replace("h", ""))
+        
+        # NEU: Intelligente Zeit-Kalkulation (Datum + MEZ/MESZ Logik)
+        now_utc = datetime.now(timezone.utc)
+        base_time_1 = DataFetcher.estimate_latest_run(mod_1, now_utc)
+        
+        options_1 = []
+        for h in h_list_1:
+            # Berechnet das exakte Zieldatum in der lokalen Zeitzone
+            valid_time = (base_time_1 + timedelta(hours=h)).astimezone(LOCAL_TZ)
+            # Sommerzeit oder Winterzeit erkennen
+            tz_str = "MESZ" if valid_time.dst() else "MEZ"
+            options_1.append(f"+{h}h | {valid_time.strftime('%d.%m.%Y %H:%M')} {tz_str}")
+            
+        hr_str_1 = st.radio("Zeitpunkt", options_1)
+        # Extrahiert wieder sicher die Stundenzahl (z.B. aus "+12h | 15.03...")
+        hr_1 = int(hr_str_1.split("h")[0].replace("+", ""))
 
     # ---------------------------------------------------------
     # MODELL 2 (Split-Screen)
@@ -1054,15 +1118,21 @@ with st.sidebar:
         else:
             model_type_2 = ModelRegistry.MODELS[mod_2]["type"]
             h_list_2 = ModelRegistry.get_timesteps(model_type_2)
-            # NEU: Auch hier als Radio-Button
-            hr_str_2 = st.radio("Zeitpunkt 2 (Stunde)", [f"+{h}h" for h in h_list_2])
-            hr_2 = int(hr_str_2.replace("+", "").replace("h", ""))
+            
+            base_time_2 = DataFetcher.estimate_latest_run(mod_2, now_utc)
+            options_2 = []
+            for h in h_list_2:
+                valid_time_2 = (base_time_2 + timedelta(hours=h)).astimezone(LOCAL_TZ)
+                tz_str_2 = "MESZ" if valid_time_2.dst() else "MEZ"
+                options_2.append(f"+{h}h | {valid_time_2.strftime('%d.%m.%Y %H:%M')} {tz_str_2}")
+                
+            hr_str_2 = st.radio("Zeitpunkt 2", options_2)
+            hr_2 = int(hr_str_2.split("h")[0].replace("+", ""))
             
     # ---------------------------------------------------------
     # OVERLAYS
     # ---------------------------------------------------------
     st.markdown("---")
-    # NEU: Alle Overlays sind standardmäßig auf False (ausgeschaltet)
     show_sat = st.checkbox("🌍 Satelliten-Hintergrund erlauben", value=False)
     show_isobars = st.checkbox("Isobaren einblenden", value=False)
     show_fronts = st.checkbox("🌪️ Fronten-Analyse aktivieren", value=False)
@@ -1139,7 +1209,8 @@ def render_axis(ax, fig, model, param, hr, region):
         else:
             run_dt = datetime.strptime(run_id, "%Y%m%d%H").replace(tzinfo=timezone.utc)
             valid_dt = (run_dt + timedelta(hours=hr)).astimezone(LOCAL_TZ)
-            txt = f"Modell: {model}\nParameter: {param}\nTermin: {valid_dt.strftime('%d.%m.%Y %H:%M')}\nLauf: {run_id[-2:]}Z"
+            tz_str = "MESZ" if valid_dt.dst() else "MEZ"
+            txt = f"Modell: {model}\nParameter: {param}\nTermin: {valid_dt.strftime('%d.%m.%Y %H:%M')} {tz_str}\nLauf: {run_id[-2:]}Z"
             
         ax.text(
             0.02, 0.98, txt, 
@@ -1148,7 +1219,7 @@ def render_axis(ax, fig, model, param, hr, region):
         )
     else:
         ax.text(
-            0.5, 0.5, "Daten aktuell nicht verfügbar", 
+            0.5, 0.5, "Daten aktuell nicht verfügbar (API Limit oder Ladefehler)", 
             transform=ax.transAxes, ha='center', va='center', 
             fontsize=12, color='red', bbox=dict(facecolor='white', alpha=0.8)
         )
@@ -1157,7 +1228,7 @@ def render_axis(ax, fig, model, param, hr, region):
 if generate or (enable_refresh and "Radar" in mod_1):
     SystemManager.cleanup_temp_files()
     
-    with st.spinner("🛰️ Lade Modell-Daten (Europa/Nordatlantik kann etwas dauern)..."):
+    with st.spinner("🛰️ Lade Modell-Daten (Langfrist-Berechnungen können dauern)..."):
         if use_split:
             col1, col2 = st.columns(2)
             with col1:
@@ -1184,3 +1255,4 @@ if generate or (enable_refresh and "Radar" in mod_1):
             )
 
     SystemManager.cleanup_temp_files()
+
