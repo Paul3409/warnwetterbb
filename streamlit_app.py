@@ -323,12 +323,12 @@ class ColormapRegistry:
         """Gesamtbedeckung: Wie befohlen in strikten Grauwerten beibehalten."""
         colors = [
             (0.00, '#FFFFFF00'), # 0 - transparent
-            (0.01, '#FFFFFF'),   # 1 - weiß
-            (0.20, '#F0F0F0'),   # 20 - weiß-grau
-            (0.40, '#D3D3D3'),   # 40 - hellgrau
-            (0.60, '#A9A9A9'),   # 60 - grau
-            (0.80, '#696969'),   # 80 - dunkles grau
-            (1.00, '#404040')    # 100 - dunkelgrau
+            (0.02, '#FFFFFF'),   # 2 - weiß
+            (0.20, '#F5F5F5'),   # 20 - weiß-grau
+            (0.40, '#DCDCDC'),   # 40 - hellgrau
+            (0.60, '#C0C0C0'),   # 60 - grau
+            (0.80, '#808080'),   # 80 - dunkles grau
+            (1.00, '#696969')    # 100 - dunkelgrau
         ]
         cmap = mcolors.LinearSegmentedColormap.from_list("cloud_scale", colors, N=256)
         cmap.set_bad(color='none')
