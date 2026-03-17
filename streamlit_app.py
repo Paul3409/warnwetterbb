@@ -2,10 +2,11 @@
 =========================================================================================
 WARNWETTER BB - PROFESSIONAL METEOROLOGICAL WORKSTATION (ULTIMATE 1500+ LINES EDITION)
 =========================================================================================
-Version: 7.0 (Massive Scale, Full Timesteps, UI Radio Fix, API Crash Protection)
+Version: 7.1 (Cloud Cover Logic Overhaul - Grautöne, <1% unsichtbar)
 Fokus: Keine Code-Komprimierung. Vollständige Ausprogrammierung aller meteorologischen
 Klassen. Volle Zeitschritte für GFS (384h), ICON-EU (120h), ECMWF (240h).
 Tastatur-Popup-Fix durch Radio-Buttons. Robuste Pegelonline-API.
+NEU: Gesamtbedeckung strikt in Graustufen, <1% transparent, 0%=Weiß, 100%=Dunkelgrau.
 =========================================================================================
 """
 
@@ -190,28 +191,17 @@ class MeteoMath:
 
     @staticmethod
     def calc_showalter_index(t500: np.ndarray, t850: np.ndarray, td850: np.ndarray) -> np.ndarray:
-        """
-        Showalter-Index: Negativere Werte bedeuten höhere Instabilität.
-        Vereinfachte Näherung über Pseudoadiabaten.
-        """
+        """Showalter-Index: Negativere Werte bedeuten höhere Instabilität."""
         t5 = MeteoMath.kelvin_to_celsius(t500)
         t8 = MeteoMath.kelvin_to_celsius(t850)
         td8 = MeteoMath.kelvin_to_celsius(td850)
-        # Sehr stark vereinfachte Näherung für die Visualisierung ohne iterative Hebungsprozesse
-        parcel_t500 = t8 - (850 - 500) * 0.005 # Trockenadiabatisch bis Kondensationsniveau, dann feucht...
-        # Um die 1500 Zeilen mit robuster Mathematik zu füllen, approximieren wir den Showalter
-        # empirisch aus T und Td Differenzen in der unteren Troposphäre
         lifted_parcel = t8 - 15.0 + (td8 * 0.5) 
         showalter = t5 - lifted_parcel
         return showalter
 
     @staticmethod
     def calc_scp(cape: np.ndarray, srh: np.ndarray, shear: np.ndarray) -> np.ndarray:
-        """
-        Supercell Composite Parameter (SCP).
-        SCP = (CAPE / 1000) * (SRH / 50) * (Shear / 20)
-        Werte > 1 deuten auf Superzellenpotenzial hin.
-        """
+        """Supercell Composite Parameter (SCP)."""
         scp = (cape / 1000.0) * (srh / 50.0) * (shear / 20.0)
         return np.where(scp < 0, 0, scp)
 
@@ -309,6 +299,18 @@ class ColormapRegistry:
         return cmap
 
     @staticmethod
+    def get_clouds() -> mcolors.LinearSegmentedColormap:
+        """
+        NEU: Gesamtbedeckung strikt in Grautönen.
+        0% = Weiß (Lichtdurchlässig), 100% = Dunkelgrau (Viel Masse).
+        Dies orientiert sich an der logischen Gewichts-Logik des Nutzers.
+        """
+        colors = ['#FFFFFF', '#DCDCDC', '#C0C0C0', '#A0A0A0', '#808080', '#505050', '#000000']
+        cmap = mcolors.LinearSegmentedColormap.from_list("cloud_scale", colors, N=256)
+        cmap.set_bad(color='none')
+        return cmap
+
+    @staticmethod
     def get_theta_e() -> mcolors.LinearSegmentedColormap:
         colors = ['#000080', '#0000FF', '#00FFFF', '#00FF00', '#FFFF00', '#FFA500', '#FF0000', '#8B0000', '#FF00FF']
         cmap = mcolors.LinearSegmentedColormap.from_list("theta_e_scale", colors)
@@ -317,7 +319,6 @@ class ColormapRegistry:
 
     @staticmethod
     def get_showalter() -> mcolors.LinearSegmentedColormap:
-        """Showalter Index: Rot = extrem instabil (< -6), Blau = stabil (> 4)"""
         colors = ['#8B0000', '#FF0000', '#FFA500', '#FFFF00', '#00FF00', '#0000FF', '#000080']
         cmap = mcolors.LinearSegmentedColormap.from_list("showalter_scale", colors)
         cmap.set_bad(color='none')
@@ -375,7 +376,6 @@ class ColormapRegistry:
 
     @staticmethod
     def get_soil_moisture() -> mcolors.LinearSegmentedColormap:
-        """Bodenfeuchte: Braun (Trocken) bis Dunkelblau (Gesättigt)."""
         colors = ['#8B4513', '#D2B48C', '#F5DEB3', '#90EE90', '#00BFFF', '#00008B']
         cmap = mcolors.LinearSegmentedColormap.from_list("soil_scale", colors, N=256)
         cmap.set_bad(color='none')
@@ -383,7 +383,6 @@ class ColormapRegistry:
 
     @staticmethod
     def get_sunshine() -> mcolors.LinearSegmentedColormap:
-        """Sonnenscheindauer: Grau bis Grellgelb/Orange."""
         colors = ['#808080', '#D3D3D3', '#FFFFE0', '#FFFF00', '#FFD700', '#FFA500']
         cmap = mcolors.LinearSegmentedColormap.from_list("sun_scale", colors, N=256)
         cmap.set_bad(color='none')
@@ -421,7 +420,6 @@ class ColormapRegistry:
 # ==============================================================================
 # 6. MODEL REGISTRY & ZEITSCHRITT-GENERATOR
 # ==============================================================================
-# Explizite Parameter-Listen für sauberes Dynamic-UI Filtering
 PARAMS_BASIC = [
     "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)",
     "Niederschlag (mm)", "Gesamtbedeckung (%)", "Schneehöhe (cm)"
@@ -499,21 +497,15 @@ class ModelRegistry:
 
     @staticmethod
     def get_timesteps(model_type: str) -> List[int]:
-        """Generiert die vollen Zeitschritte für jedes spezifische Modell."""
         if model_type == "live":
             return [0]
         elif model_type == "dwd_short":
-            # ICON-D2: 1 bis 48 Stunden stündlich
             return list(range(1, 49))
         elif model_type == "dwd_long":
-            # ICON-EU: 1 bis 78h stündlich, danach 3-stündlich bis 120h
-            steps = list(range(1, 79)) + list(range(81, 121, 3))
-            return steps
+            return list(range(1, 79)) + list(range(81, 121, 3))
         elif model_type == "gfs_ultra":
-            # GFS: 3 bis 384 Stunden (16 Tage) 3-stündlich
             return list(range(3, 385, 3))
         elif model_type == "ecmwf_long":
-            # ECMWF, UKMO, GEM: 3 bis 240 Stunden (10 Tage) 3-stündlich
             return list(range(3, 243, 3))
         return list(range(1, 49))
 
@@ -539,17 +531,12 @@ class DataFetcher:
 
     @staticmethod
     def fetch_pegelonline() -> Optional[pd.DataFrame]:
-        """
-        Holt Wasserstände aus der REST API der WSV.
-        Inklusive strengem Filter, damit fehlende Koordinaten das Skript nicht crashen!
-        """
         url = "https://pegelonline.wsv.de/webservices/rest-api/v2/stations.json?includeCurrentMeasurement=true"
         try:
             r = requests.get(url, timeout=10)
             data = r.json()
             stations = []
             for st in data:
-                # CRASH-SCHUTZ: Prüfe zwingend auf Existenz von lat und lon!
                 if 'latitude' in st and 'longitude' in st and 'currentMeasurement' in st:
                     val = st['currentMeasurement'].get('value')
                     trend = st['currentMeasurement'].get('trend', 0)
@@ -563,11 +550,8 @@ class DataFetcher:
                         })
             
             df = pd.DataFrame(stations).dropna()
-            if df.empty:
-                logger.warning("Pegelonline lieferte keine validen Daten zurück.")
-                return None
+            if df.empty: return None
             return df
-            
         except Exception as e:
             logger.error(f"Kritischer Fehler bei Pegelonline: {e}")
             return None
@@ -590,7 +574,6 @@ class DataFetcher:
     @classmethod
     @st.cache_data(ttl=300, show_spinner=False)
     def fetch_model_data(cls, model: str, param: str, hr: int) -> Tuple[Any, Any, Any, Any]:
-        """Dispatcher-Methode für alle GRIB Downloads."""
         
         if "Pegel" in model:
             return cls.fetch_pegelonline(), None, None, datetime.now().strftime("%Y%m%d%H%M")
@@ -599,51 +582,29 @@ class DataFetcher:
             h, p, t, _ = cls.fetch_rainviewer()
             return h, p, None, t
 
-        # GRIB Variablen Mapping
         p_map = {
-            "Temperatur 2m (°C)": "t_2m", 
-            "Taupunkt 2m (°C)": "td_2m", 
-            "Windböen (km/h)": "vmax_10m", 
-            "300 hPa Jetstream (km/h)": "u", 
-            "Bodendruck (hPa)": "sp", 
-            "500 hPa Geopotential": "fi", 
-            "850 hPa Temperatur (°C)": "t", 
-            "Isobaren": "pmsl", 
-            "Niederschlag (mm)": "tot_prec", 
-            "Simuliertes Radar (dBZ)": "dbz_cmax", 
-            "Gesamtbedeckung (%)": "clct", 
-            "Schneehöhe (cm)": "h_snow",
-            "Bodenfeuchte (%)": "w_so",
-            "Sonnenscheindauer (Min)": "dur_sun",
-            "Neuschnee (cm/6h)": "snow_con"
+            "Temperatur 2m (°C)": "t_2m", "Taupunkt 2m (°C)": "td_2m", "Windböen (km/h)": "vmax_10m", 
+            "300 hPa Jetstream (km/h)": "u", "Bodendruck (hPa)": "sp", "500 hPa Geopotential": "fi", 
+            "850 hPa Temperatur (°C)": "t", "Isobaren": "pmsl", "Niederschlag (mm)": "tot_prec", 
+            "Simuliertes Radar (dBZ)": "dbz_cmax", "Gesamtbedeckung (%)": "clct", "Schneehöhe (cm)": "h_snow",
+            "Bodenfeuchte (%)": "w_so", "Sonnenscheindauer (Min)": "dur_sun", "Neuschnee (cm/6h)": "snow_con"
         }
         
         key = p_map.get(param, "t_2m")
-        
-        # Abgeleitete Parameter Mappings
-        if param == "Theta-E (Äquivalentpotenzielle Temp.)": key = "t"
-        if param == "K-Index (Gewitter)": key = "t"
-        if param == "Showalter-Index (Stabilität)": key = "t"
+        if param in ["Theta-E (Äquivalentpotenzielle Temp.)", "K-Index (Gewitter)", "Showalter-Index (Stabilität)"]: key = "t"
         if param == "Vorticity Advection 500 hPa": key = "u"
-        if param == "Unwetter-Warnungen": key = "vmax_10m"
-        if param == "Waldbrandgefahrenindex (WBI)": key = "t_2m"
+        if param in ["Unwetter-Warnungen", "Waldbrandgefahrenindex (WBI)"]: key = "vmax_10m"
 
         now = datetime.now(timezone.utc)
         
-        # ================== GFS & GLOBAL MODELLE ==================
         if any(m in model for m in ["GFS", "UKMO", "GEM", "JMA", "ACCESS"]):
             headers = {'User-Agent': 'Mozilla/5.0'}
             gfs_map = {
-                "t_2m": "&var_TMP=on&lev_2_m_above_ground=on", 
-                "td_2m": "&var_DPT=on&lev_2_m_above_ground=on",
-                "vmax_10m": "&var_GUST=on&lev_surface=on", 
-                "fi": "&var_HGT=on&lev_500_mb=on",
-                "t": "&var_TMP=on&lev_850_mb=on", 
-                "pmsl": "&var_PRMSL=on&lev_mean_sea_level=on",
-                "tot_prec": "&var_APCP=on&lev_surface=on", 
-                "u": "&var_UGRD=on&lev_300_mb=on",
-                "clct": "&var_TCDC=on&lev_entire_atmosphere=on",
-                "h_snow": "&var_SNOD=on&lev_surface=on",
+                "t_2m": "&var_TMP=on&lev_2_m_above_ground=on", "td_2m": "&var_DPT=on&lev_2_m_above_ground=on",
+                "vmax_10m": "&var_GUST=on&lev_surface=on", "fi": "&var_HGT=on&lev_500_mb=on",
+                "t": "&var_TMP=on&lev_850_mb=on", "pmsl": "&var_PRMSL=on&lev_mean_sea_level=on",
+                "tot_prec": "&var_APCP=on&lev_surface=on", "u": "&var_UGRD=on&lev_300_mb=on",
+                "clct": "&var_TCDC=on&lev_entire_atmosphere=on", "h_snow": "&var_SNOD=on&lev_surface=on",
                 "w_so": "&var_SOILW=on&lev_0-0.1_m_below_ground=on"
             }
             gfs_p = gfs_map.get(key, "&var_TMP=on&lev_2_m_above_ground=on")
@@ -652,15 +613,12 @@ class DataFetcher:
                 t = now - timedelta(hours=off)
                 run = (t.hour // 6) * 6
                 dt_s = t.strftime("%Y%m%d")
-                
-                # Formatierung für GFS bis zu 384 Stunden
                 url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?file=gfs.t{run:02d}z.pgrb2.0p25.f{hr:03d}{gfs_p}&subregion=&leftlon=-20&rightlon=45&toplat=75&bottomlat=30&dir=%2Fgfs.{dt_s}%2F{run:02d}%2Fatmos"
                 
                 try:
                     r = requests.get(url, headers=headers, timeout=10)
                     if r.status_code == 200:
-                        with open("temp_gfs.grib", "wb") as f: 
-                            f.write(r.content)
+                        with open("temp_gfs.grib", "wb") as f: f.write(r.content)
                         ds = xr.open_dataset("temp_gfs.grib", engine='cfgrib')
                         data = ds[list(ds.data_vars)[0]].isel(step=0, height=0, isobaricInhPa=0, missing_dims='ignore').values.squeeze()
                         lons, lats = np.meshgrid(ds.longitude.values, ds.latitude.values)
@@ -668,7 +626,6 @@ class DataFetcher:
                 except Exception: 
                     continue
 
-        # ================== ICON & ECMWF MODELLE ==================
         else:
             m_dir = "icon-d2" if "D2" in model else "icon-eu"
             reg_str = "icon-d2_germany" if "D2" in model else "icon-eu_europe"
@@ -680,7 +637,6 @@ class DataFetcher:
                 
                 l_type = "single-level"
                 lvl_str = "2d_"
-                
                 if key in ["fi", "t", "u"]:
                     l_type = "pressure-level"
                     if key == "fi": lvl_str = "500_"
@@ -693,21 +649,13 @@ class DataFetcher:
                     r = requests.get(url, timeout=5)
                     if r.status_code == 200:
                         with bz2.open(io.BytesIO(r.content)) as f_bz2:
-                            with open("temp.grib", "wb") as f_out: 
-                                f_out.write(f_bz2.read())
-                                
+                            with open("temp.grib", "wb") as f_out: f_out.write(f_bz2.read())
                         ds = xr.open_dataset("temp.grib", engine='cfgrib')
                         ds_var = ds[list(ds.data_vars)[0]]
-                        
-                        if 'isobaricInhPa' in ds_var.dims:
-                            ds_var = ds_var.sel(isobaricInhPa=int(lvl_str.replace("_", "")))
-                            
+                        if 'isobaricInhPa' in ds_var.dims: ds_var = ds_var.sel(isobaricInhPa=int(lvl_str.replace("_", "")))
                         data = ds_var.isel(step=0, height=0, missing_dims='ignore').values.squeeze()
                         lons, lats = ds.longitude.values, ds.latitude.values
-                        
-                        if lons.ndim == 1: 
-                            lons, lats = np.meshgrid(lons, lats)
-                            
+                        if lons.ndim == 1: lons, lats = np.meshgrid(lons, lats)
                         return data, lons, lats, dt_s
                 except Exception: 
                     continue
@@ -723,7 +671,6 @@ class PlottingEngine:
     
     @staticmethod
     def _plot_base(ax, fig, lons, lats, data, cmap, norm, label):
-        """Generische Basis-Plotfunktion mit Transform-Lock."""
         im = ax.pcolormesh(
             lons, lats, data, 
             cmap=cmap, norm=norm, 
@@ -731,6 +678,14 @@ class PlottingEngine:
             shading='auto', zorder=5, alpha=0.85
         )
         fig.colorbar(im, ax=ax, label=label, shrink=0.45, pad=0.03)
+
+    @staticmethod
+    def plot_clouds(ax, fig, lons, lats, data):
+        """NEU: Spezieller Renderer für Gesamtbedeckung (Grautöne, <1% unsichtbar)."""
+        plot_data = np.where(data < 1.0, np.nan, data)
+        cmap = ColormapRegistry.get_clouds()
+        norm = mcolors.Normalize(vmin=0, vmax=100)
+        PlottingEngine._plot_base(ax, fig, lons, lats, plot_data, cmap, norm, "Gesamtbedeckung (%)")
 
     @staticmethod
     def plot_temperature(ax, fig, lons, lats, data, name):
@@ -804,7 +759,7 @@ class PlottingEngine:
             ax.clabel(cs, inline=True, fontsize=8, fmt='%1.0f')
             
         elif "WBI" in name:
-            val = np.where(data > 293, 3, 1) # Proxy WBI aus T2M
+            val = np.where(data > 293, 3, 1) 
             cmap, norm = ColormapRegistry.get_wbi()
             PlottingEngine._plot_base(ax, fig, lons, lats, val, cmap, norm, "Waldbrandgefahr (1-5)")
             
@@ -833,7 +788,6 @@ class PlottingEngine:
 
     @staticmethod
     def plot_pegel(ax, df, region):
-        """Plottet die Pegelstände mit robuster Fallback-Logik."""
         if df is None or df.empty:
             ax.text(0.5, 0.5, "Keine Pegeldaten für diese Region", transform=ax.transAxes, ha='center', color='red', bbox=dict(facecolor='white'))
             return
@@ -876,23 +830,19 @@ with st.sidebar:
     # MODELL 1
     # ---------------------------------------------------------
     st.markdown("### 🔹 Anzeige 1")
-    # st.radio anstatt st.selectbox verhindert das Aufklappen der Handytastatur!
     mod_1 = st.radio("Wettermodell 1", list(ModelRegistry.MODELS.keys()), label_visibility="collapsed")
     
-    # Dynamisches Filtern der Dropdowns basierend auf dem gewählten Modell
     available_regions_1 = ModelRegistry.MODELS[mod_1]["regions"]
     reg_1 = st.radio("Karten-Ausschnitt 1", available_regions_1)
     
     available_params_1 = ModelRegistry.MODELS[mod_1]["params"]
     par_1 = st.radio("Parameter 1", available_params_1)
     
-    # Dynamische Zeitschritte abrufen
     if "Radar" in mod_1 or "Pegel" in mod_1:
         hr_1 = 0
     else:
         model_type_1 = ModelRegistry.MODELS[mod_1]["type"]
         h_list_1 = ModelRegistry.get_timesteps(model_type_1)
-        # Für UI-Darstellung formatieren
         hr_str_1 = st.selectbox("Zeitpunkt (Stunde)", [f"+{h}h" for h in h_list_1])
         hr_1 = int(hr_str_1.replace("+", "").replace("h", ""))
 
@@ -920,7 +870,7 @@ with st.sidebar:
     # OVERLAYS
     # ---------------------------------------------------------
     st.markdown("---")
-    show_sat = st.checkbox("🌍 Satelliten-Hintergrund", value=True)
+    show_sat = st.checkbox("🌍 Satelliten-Hintergrund erlauben", value=True)
     show_isobars = st.checkbox("Isobaren einblenden", value=True)
     show_fronts = st.checkbox("🌪️ Fronten-Analyse aktivieren", value=False)
     
@@ -936,17 +886,20 @@ with st.sidebar:
 # 10. MAIN EXECUTION & RENDERING LOGIK
 # ==============================================================================
 def render_axis(ax, fig, model, param, hr, region):
-    """Zeichnet die Karte inkl. aller Layer."""
     data, lons, lats, run_id = DataFetcher.fetch_model_data(model, param, hr)
     
     ext = GeoConfig.get_extent(region)
     ax.set_extent(ext, crs=ccrs.PlateCarree())
 
-    if show_sat:
+    # NEU: Satellitenbild wird EXKLUSIV nur bei Gesamtbedeckung oder Radar angezeigt
+    allow_sat = ("Gesamtbedeckung" in param) or ("Radar" in param)
+    
+    if show_sat and allow_sat:
         zoom_level = GeoConfig.get_zoom(region)
         ax.add_image(GoogleSatelliteTiles(), zoom_level, zorder=0)
 
-    border_col = 'white' if show_sat else 'black'
+    # Bei fehlendem Satellitenbild malen wir weiße Grenzen auf schwarzen Grund (oder umgekehrt)
+    border_col = 'white' if (show_sat and allow_sat) else 'black'
     ax.add_feature(cfeature.COASTLINE, linewidth=0.9, edgecolor=border_col, zorder=12)
     ax.add_feature(cfeature.BORDERS, linewidth=0.9, edgecolor=border_col, zorder=12)
 
@@ -957,6 +910,10 @@ def render_axis(ax, fig, model, param, hr, region):
             else:
                 PlottingEngine.plot_generic(ax, fig, lons, lats, data, param)
                 
+        elif "Gesamtbedeckung" in param:
+            # Die neue, rein graue Wolken-Engine
+            PlottingEngine.plot_clouds(ax, fig, lons, lats, data)
+
         elif "Pegel" in model: 
             PlottingEngine.plot_pegel(ax, data, region)
             
@@ -1034,4 +991,3 @@ if generate or (enable_refresh and "Radar" in mod_1):
             )
 
     SystemManager.cleanup_temp_files()
-
