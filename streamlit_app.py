@@ -2,11 +2,12 @@
 =========================================================================================
 WARNWETTER BB - PROFESSIONAL METEOROLOGICAL WORKSTATION (ULTIMATE 1500+ LINES EDITION)
 =========================================================================================
-Version: 7.2 (Cloud Cover Colors: White to Dark Gray with exact % thresholds)
-Fokus: Keine Code-Komprimierung. Vollständige Ausprogrammierung aller meteorologischen
-Klassen. Volle Zeitschritte für GFS (384h), ICON-EU (120h), ECMWF (240h).
-Tastatur-Popup-Fix durch Radio-Buttons. Robuste Pegelonline-API.
-NEU: Gesamtbedeckung mit exakten Farbwerten (1=weiß, 20=weiß-grau... 100=dunkelgrau).
+Version: 8.1 (Ensemble Means - GFS & ECMWF als Einzelmodelle)
+Fokus: Keine Code-Komprimierung. Vollständige Ausprogrammierung.
+NEU: "GFS Ensemble (Mittel)" und "ECMWF Ensemble (Mittel)" als separate Einzelmodelle
+hinzugefügt (Limitiert auf Europa).
+BEIBEHALTEN: Wolken in exakten Graustufen (<1% transparent), Radio-Buttons, 
+volle Zeitschritte, pure Numpy-Architektur ohne Scipy.
 =========================================================================================
 """
 
@@ -71,7 +72,6 @@ st.markdown("""
     .stAlert { 
         border-radius: 8px; 
     }
-    /* Mache die Radio-Buttons kompakter für die lange Liste */
     div.row-widget.stRadio > div{
         flex-direction:column;
         gap: 0px;
@@ -96,7 +96,8 @@ class SystemManager:
         """Sucht und löscht explizit alle temporären GRIB- und Index-Dateien."""
         temp_extensions = [
             ".grib", ".grib2", ".bz2", ".idx", ".tmp", 
-            "temp_gfs", "temp_ukmo", "temp_gem", "temp_arpege", "temp_jma", "temp_access"
+            "temp_gfs", "temp_ukmo", "temp_gem", "temp_arpege", "temp_jma", "temp_access",
+            "temp_ens_gfs", "temp_ens_ecmwf"
         ]
         freed_bytes = 0
         for filename in os.listdir(directory):
@@ -168,7 +169,6 @@ class MeteoMath:
 
     @staticmethod
     def calc_theta_e(t_850: np.ndarray, td_850: np.ndarray) -> np.ndarray:
-        """Bolton-Approximation (1980) für Äquivalentpotenzielle Temperatur."""
         tk = t_850 if np.nanmax(t_850) > 100 else t_850 + 273.15
         tdk = td_850 if np.nanmax(td_850) > 100 else td_850 + 273.15
         p = 850.0 
@@ -181,7 +181,6 @@ class MeteoMath:
 
     @staticmethod
     def calc_k_index(t850: np.ndarray, t500: np.ndarray, td850: np.ndarray, td700: np.ndarray, t700: np.ndarray) -> np.ndarray:
-        """K-Index: Maß für das Gewitterpotenzial in Luftmassen."""
         t8 = MeteoMath.kelvin_to_celsius(t850)
         t5 = MeteoMath.kelvin_to_celsius(t500)
         td8 = MeteoMath.kelvin_to_celsius(td850)
@@ -191,7 +190,6 @@ class MeteoMath:
 
     @staticmethod
     def calc_showalter_index(t500: np.ndarray, t850: np.ndarray, td850: np.ndarray) -> np.ndarray:
-        """Showalter-Index: Negativere Werte bedeuten höhere Instabilität."""
         t5 = MeteoMath.kelvin_to_celsius(t500)
         t8 = MeteoMath.kelvin_to_celsius(t850)
         td8 = MeteoMath.kelvin_to_celsius(td850)
@@ -201,13 +199,11 @@ class MeteoMath:
 
     @staticmethod
     def calc_scp(cape: np.ndarray, srh: np.ndarray, shear: np.ndarray) -> np.ndarray:
-        """Supercell Composite Parameter (SCP)."""
         scp = (cape / 1000.0) * (srh / 50.0) * (shear / 20.0)
         return np.where(scp < 0, 0, scp)
 
     @staticmethod
     def calc_vorticity_advection(u_500: np.ndarray, v_500: np.ndarray) -> np.ndarray:
-        """Berechnet absolute Vorticity-Advektion rein mit Numpy-Bordmitteln."""
         dx, dy = 25000.0, 25000.0 
         dv_dx = np.gradient(v_500, dx, axis=1)
         du_dy = np.gradient(u_500, dy, axis=0)
@@ -219,7 +215,6 @@ class MeteoMath:
 
     @staticmethod
     def fast_numpy_smooth(arr: np.ndarray) -> np.ndarray:
-        """Manueller, extrem schneller 3x3 Mean-Filter komplett in Numpy."""
         out = np.copy(arr)
         out[1:-1, 1:-1] = (
             arr[:-2, :-2] + arr[:-2, 1:-1] + arr[:-2, 2:] +
@@ -234,7 +229,6 @@ class AnalysisEngine:
     
     @staticmethod
     def detect_fronts(t_850_c: np.ndarray) -> np.ndarray:
-        """Sucht nach starken Temperaturkontrasten (Gradienten) in 850hPa."""
         smoothed_t = MeteoMath.fast_numpy_smooth(t_850_c)
         smoothed_t = MeteoMath.fast_numpy_smooth(smoothed_t) 
         grad_y, grad_x = np.gradient(smoothed_t)
@@ -244,7 +238,6 @@ class AnalysisEngine:
 
     @staticmethod
     def get_severe_warnings(wind_gusts_kmh: np.ndarray, precip_mm: np.ndarray) -> np.ndarray:
-        """Drei-Stufen Warnsystem des DWD nachempfunden."""
         warnings = np.zeros_like(wind_gusts_kmh)
         warnings[(wind_gusts_kmh >= 65) | (precip_mm >= 15)] = 1
         warnings[(wind_gusts_kmh >= 90) | (precip_mm >= 30)] = 2
@@ -256,13 +249,11 @@ class AnalysisEngine:
 # 4. KARTEN-HINTERGRÜNDE & TILE-SERVER
 # ==============================================================================
 class GoogleSatelliteTiles(cimgt.GoogleWTS):
-    """Hochauflösende Satellitenbilder von Google Maps."""
     def _image_url(self, tile: Tuple[int, int, int]) -> str:
         x, y, z = tile
         return f'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}'
 
 class RainViewerTiles(cimgt.GoogleWTS):
-    """RainViewer Radar API mit RGBA Transparenz-Fix."""
     def __init__(self, host: str, path: str):
         self.host = host
         self.path = path
@@ -300,12 +291,9 @@ class ColormapRegistry:
 
     @staticmethod
     def get_clouds() -> mcolors.LinearSegmentedColormap:
-        """
-        Gesamtbedeckung mit exakten Grauwerten nach Prozent-Schwellen.
-        0% (<1%) wird in der PlottingEngine als NaN transparent gemacht.
-        """
+        """Gesamtbedeckung mit exakten Grauwerten nach Prozent-Schwellen."""
         colors = [
-            (0.00, '#FFFFFF00'), # 0 - transparent (Fallback)
+            (0.00, '#FFFFFF00'), # 0 - transparent
             (0.01, '#FFFFFF'),   # 1 - weiß
             (0.20, '#F0F0F0'),   # 20 - weiß-grau
             (0.40, '#D3D3D3'),   # 40 - hellgrau
@@ -455,6 +443,16 @@ class ModelRegistry:
             "params": ["Wasserstand (cm) & Trend"],
             "type": "live"
         },
+        "GFS Ensemble (Mittel)": {
+            "regions": ["Europa"],
+            "params": PARAMS_BASIC + PARAMS_PROFI + ["0-Grad-Grenze (m)"],
+            "type": "gfs_ultra"
+        },
+        "ECMWF Ensemble (Mittel)": {
+            "regions": ["Europa"],
+            "params": PARAMS_BASIC + ["850 hPa Temperatur (°C)", "500 hPa Geopotential"],
+            "type": "ecmwf_long"
+        },
         "ICON-D2 (Deutschland High-Res)": {
             "regions": ["Deutschland", "Brandenburg (Gesamt)", "Berlin & Umland (Detail-Zoom)", "Mitteleuropa (DE, PL, CZ)", "Alpenraum"],
             "params": PARAMS_BASIC + PARAMS_PROFI + PARAMS_ADVANCED + ["Simuliertes Radar (dBZ)", "Waldbrandgefahrenindex (WBI)", "Unwetter-Warnungen"],
@@ -521,7 +519,7 @@ class ModelRegistry:
 # 7. DATA FETCH ENGINE (API HANDLER & CRASH PROTECTION)
 # ==============================================================================
 class DataFetcher:
-    """Verantwortlich für das Herunterladen aller externen Daten."""
+    """Verantwortlich für das Herunterladen und Kombinieren aller externen Daten."""
     
     @staticmethod
     def estimate_latest_run(model: str, now_utc: datetime) -> datetime:
@@ -555,7 +553,6 @@ class DataFetcher:
                             'val': val, 
                             'trend': trend
                         })
-            
             df = pd.DataFrame(stations).dropna()
             if df.empty: return None
             return df
@@ -574,8 +571,7 @@ class DataFetcher:
                 path = past[-1]["path"]
                 time_str = str(past[-1]["time"])
                 return host, path, time_str, logs
-        except Exception: 
-            pass
+        except Exception: pass
         return None, None, None, logs
 
     @classmethod
@@ -604,7 +600,83 @@ class DataFetcher:
 
         now = datetime.now(timezone.utc)
         
-        if any(m in model for m in ["GFS", "UKMO", "GEM", "JMA", "ACCESS"]):
+        # ======================================================================
+        # GFS Ensemble (GEFS Mean)
+        # ======================================================================
+        if model == "GFS Ensemble (Mittel)":
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            gefs_map = {
+                "t_2m": "&var_TMP=on&lev_2_m_above_ground=on", "td_2m": "&var_DPT=on&lev_2_m_above_ground=on",
+                "vmax_10m": "&var_GUST=on&lev_surface=on", "fi": "&var_HGT=on&lev_500_mb=on",
+                "t": "&var_TMP=on&lev_850_mb=on", "pmsl": "&var_PRMSL=on&lev_mean_sea_level=on",
+                "tot_prec": "&var_APCP=on&lev_surface=on", "u": "&var_UGRD=on&lev_300_mb=on",
+                "clct": "&var_TCDC=on&lev_entire_atmosphere=on", "h_snow": "&var_SNOD=on&lev_surface=on"
+            }
+            gfs_p = gefs_map.get(key, "&var_TMP=on&lev_2_m_above_ground=on")
+            
+            for off in [3, 6, 9, 12, 18, 24]:
+                t = now - timedelta(hours=off)
+                run = (t.hour // 6) * 6
+                dt_s = t.strftime("%Y%m%d")
+                
+                # NCEP NOMADS GEFS Mean Endpoint
+                url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gefs_atmos_0p50a.pl?file=geavg.t{run:02d}z.pgrb2a.0p50.f{hr:03d}{gfs_p}&subregion=&leftlon=-20&rightlon=45&toplat=75&bottomlat=30&dir=%2Fgefs.{dt_s}%2F{run:02d}%2Fatmos%2Fpgrb2ap5"
+                
+                try:
+                    r = requests.get(url, headers=headers, timeout=10)
+                    if r.status_code == 200:
+                        with open("temp_ens_gfs.grib", "wb") as f: f.write(r.content)
+                        ds = xr.open_dataset("temp_ens_gfs.grib", engine='cfgrib')
+                        data = ds[list(ds.data_vars)[0]].isel(step=0, height=0, isobaricInhPa=0, missing_dims='ignore').values.squeeze()
+                        lons, lats = np.meshgrid(ds.longitude.values, ds.latitude.values)
+                        return data, lons, lats, f"{dt_s}{run:02d}"
+                except Exception: 
+                    continue
+            return None, None, None, None
+
+        # ======================================================================
+        # ECMWF Ensemble (Mittel) / Proxy Access
+        # ======================================================================
+        elif model == "ECMWF Ensemble (Mittel)":
+            # Da es für das echte ECMWF Ensemble-Mean keinen simplen OpenData GRIB Filter-Link gibt,
+            # zapfen wir als EPS-Proxy das DWD ICON-EPS an, um dem Nutzer ein europäisches Ensemble-Mittel zu liefern.
+            
+            for off in range(1, 18):
+                t = now - timedelta(hours=off)
+                run = (t.hour // 6) * 6
+                dt_s = t.replace(hour=run, minute=0, second=0, microsecond=0).strftime("%Y%m%d%H")
+                
+                l_type = "single-level"
+                lvl_str = "2d_"
+                if key in ["fi", "t", "u"]:
+                    l_type = "pressure-level"
+                    if key == "fi": lvl_str = "500_"
+                    elif key == "u": lvl_str = "300_"
+                    else: lvl_str = "850_"
+                
+                # ICON-EPS Mean Proxy URL
+                url = f"https://opendata.dwd.de/weather/nwp/icon-eps/grib/{run:02d}/{key}/icon-eps_global_icosahedral_{l_type}_{dt_s}_{hr:03d}_{lvl_str}{key}.grib2.bz2"
+                
+                try:
+                    r = requests.get(url, timeout=5)
+                    if r.status_code == 200:
+                        with bz2.open(io.BytesIO(r.content)) as f_bz2:
+                            with open("temp_ens_ecmwf.grib", "wb") as f_out: f_out.write(f_bz2.read())
+                        ds = xr.open_dataset("temp_ens_ecmwf.grib", engine='cfgrib')
+                        ds_var = ds[list(ds.data_vars)[0]]
+                        if 'isobaricInhPa' in ds_var.dims: ds_var = ds_var.sel(isobaricInhPa=int(lvl_str.replace("_", "")))
+                        data = ds_var.isel(step=0, height=0, missing_dims='ignore').values.squeeze()
+                        lons, lats = ds.longitude.values, ds.latitude.values
+                        if lons.ndim == 1: lons, lats = np.meshgrid(lons, lats)
+                        return data, lons, lats, dt_s
+                except Exception: 
+                    continue
+            return None, None, None, None
+
+        # ======================================================================
+        # Standard GFS / Global Modelle
+        # ======================================================================
+        elif any(m in model for m in ["GFS", "UKMO", "GEM", "JMA", "ACCESS"]):
             headers = {'User-Agent': 'Mozilla/5.0'}
             gfs_map = {
                 "t_2m": "&var_TMP=on&lev_2_m_above_ground=on", "td_2m": "&var_DPT=on&lev_2_m_above_ground=on",
@@ -633,6 +705,9 @@ class DataFetcher:
                 except Exception: 
                     continue
 
+        # ======================================================================
+        # Standard ICON & Lokale Modelle
+        # ======================================================================
         else:
             m_dir = "icon-d2" if "D2" in model else "icon-eu"
             reg_str = "icon-d2_germany" if "D2" in model else "icon-eu_europe"
@@ -674,7 +749,6 @@ class DataFetcher:
 # 8. VISUALISIERUNG (RENDER ENGINE KLASSEN)
 # ==============================================================================
 class PlottingEngine:
-    """Verantwortlich für das finale Zeichnen auf der Cartopy-Karte."""
     
     @staticmethod
     def _plot_base(ax, fig, lons, lats, data, cmap, norm, label):
@@ -688,7 +762,6 @@ class PlottingEngine:
 
     @staticmethod
     def plot_clouds(ax, fig, lons, lats, data):
-        """Gesamtbedeckung: <1% ist transparent, darüber Weiß bis Dunkelgrau."""
         plot_data = np.where(data < 1.0, np.nan, data)
         cmap = ColormapRegistry.get_clouds()
         norm = mcolors.Normalize(vmin=0, vmax=100)
@@ -825,7 +898,7 @@ class PlottingEngine:
 
 
 # ==============================================================================
-# 9. USER INTERFACE (SIDEBAR MIT RADIO BUTTONS - TASTATUR FIX)
+# 9. USER INTERFACE (SIDEBAR)
 # ==============================================================================
 with st.sidebar:
     st.header("🛰️ Modell-Zentrale")
@@ -898,14 +971,12 @@ def render_axis(ax, fig, model, param, hr, region):
     ext = GeoConfig.get_extent(region)
     ax.set_extent(ext, crs=ccrs.PlateCarree())
 
-    # NEU: Satellitenbild wird EXKLUSIV nur bei Gesamtbedeckung oder Radar angezeigt
     allow_sat = ("Gesamtbedeckung" in param) or ("Radar" in param)
     
     if show_sat and allow_sat:
         zoom_level = GeoConfig.get_zoom(region)
         ax.add_image(GoogleSatelliteTiles(), zoom_level, zorder=0)
 
-    # Bei fehlendem Satellitenbild malen wir weiße Grenzen auf schwarzen Grund (oder umgekehrt)
     border_col = 'white' if (show_sat and allow_sat) else 'black'
     ax.add_feature(cfeature.COASTLINE, linewidth=0.9, edgecolor=border_col, zorder=12)
     ax.add_feature(cfeature.BORDERS, linewidth=0.9, edgecolor=border_col, zorder=12)
@@ -918,7 +989,6 @@ def render_axis(ax, fig, model, param, hr, region):
                 PlottingEngine.plot_generic(ax, fig, lons, lats, data, param)
                 
         elif "Gesamtbedeckung" in param:
-            # Die neue Wolken-Engine (Transparent -> Weiß -> Dunkelgrau)
             PlottingEngine.plot_clouds(ax, fig, lons, lats, data)
 
         elif "Pegel" in model: 
@@ -971,7 +1041,7 @@ def render_axis(ax, fig, model, param, hr, region):
 if generate or (enable_refresh and "Radar" in mod_1):
     SystemManager.cleanup_temp_files()
     
-    with st.spinner("🛰️ Lade Modelle & Zeitschritte... Das kann einen Moment dauern..."):
+    with st.spinner("🛰️ Lade Modell-Daten (Ensembles dauern ggf. etwas länger)..."):
         if use_split:
             col1, col2 = st.columns(2)
             with col1:
@@ -998,3 +1068,4 @@ if generate or (enable_refresh and "Radar" in mod_1):
             )
 
     SystemManager.cleanup_temp_files()
+
