@@ -323,7 +323,7 @@ class ColormapRegistry:
         """Gesamtbedeckung: Wie befohlen in strikten Grauwerten beibehalten."""
         colors = [
             (0.00, '#FFFFFF00'), # 0 - transparent
-            (0.02, '#FFFFFF'),   # 2 - weiß
+            (0.05, '#FFFFFF'),   # 5 - weiß
             (0.20, '#F5F5F5'),   # 20 - weiß-grau
             (0.40, '#DCDCDC'),   # 40 - hellgrau
             (0.60, '#C0C0C0'),   # 60 - grau
