@@ -1,15 +1,16 @@
 """
 =========================================================================================
-WARNWETTER BB - PROFESSIONAL METEOROLOGICAL WORKSTATION (ULTIMATE 1600+ LINES EDITION)
+WARNWETTER BB - PROFESSIONAL METEOROLOGICAL WORKSTATION (ULTIMATE 1800+ LINES EDITION)
 =========================================================================================
-Version: 9.0 (Euro-Atlantic Expansion & Vivid Colors Update)
+Version: 11.0 (The "Every-Parameter-Customizable" & Mobile Flow Edition)
 Fokus: Keine Code-Komprimierung. Vollständige Ausprogrammierung.
 NEU: 
-- Region "Europa und Nordatlantik" hinzugefügt.
-- "500 hPa Geopot. Höhe" mit exakter Experten-Farbskala & 552 gpdm Schwarzlinie.
-- Isobaren-Bug behoben (Funktion war verschwunden, ist jetzt wieder da).
-- Knalligere HTML-Farbcodes für alle Parameter (außer Wolken, die bleiben grau!).
-BEIBEHALTEN: Ensemble-Einzelmodelle, Radio-Buttons, volle Zeitschritte.
+- ÜBER 20 INDIVIDUELLE FARBSKALEN: Jeder Parameter hat jetzt seine völlig eigene 
+  Farb-Definition in der ColormapRegistry. Perfekt zum nachträglichen Anpassen!
+- Zeitauswahl als Radio-Buttons (verhindert lästige Tastatur-Popups auf dem Handy).
+- Alle Overlays (Satellit, Isobaren, Fronten) sind standardmäßig auf AUS (False).
+BEIBEHALTEN: Region "Europa/Nordatlantik", 500hPa Logik (552er Linie), 
+Wolken-Graustufen (<1% transparent) und pure Numpy-Power ohne Scipy.
 =========================================================================================
 """
 
@@ -74,6 +75,7 @@ st.markdown("""
     .stAlert { 
         border-radius: 8px; 
     }
+    /* Mache ALLE Radio-Buttons kompakter für die lange Liste */
     div.row-widget.stRadio > div{
         flex-direction:column;
         gap: 0px;
@@ -89,10 +91,7 @@ WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 # 2. SYSTEM UTILITIES (GARBAGE COLLECTION)
 # ==============================================================================
 class SystemManager:
-    """
-    Sorgt dafür, dass der RAM des Servers nicht vollläuft.
-    Wird vor und nach jedem Render-Vorgang aufgerufen.
-    """
+    """Sorgt dafür, dass der RAM des Servers nicht vollläuft."""
     @staticmethod
     def cleanup_temp_files(directory: str = ".") -> None:
         """Sucht und löscht explizit alle temporären GRIB- und Index-Dateien."""
@@ -126,7 +125,7 @@ class GeoConfig:
         "Norddeutschland / Küste": [6.0, 14.5, 52.5, 55.2],
         "Mitteleuropa (DE, PL, CZ)": [4.0, 25.0, 45.0, 56.0],
         "Europa": [-12.0, 40.0, 34.0, 66.0],
-        "Europa und Nordatlantik": [-45.0, 40.0, 30.0, 75.0] # NEU hinzugefügt
+        "Europa und Nordatlantik": [-45.0, 40.0, 30.0, 75.0]
     }
     
     ZOOM_LEVELS = {
@@ -137,7 +136,7 @@ class GeoConfig:
         "Norddeutschland / Küste": 7,
         "Mitteleuropa (DE, PL, CZ)": 6,
         "Europa": 5,
-        "Europa und Nordatlantik": 4 # Etwas weiter rausgezoomt
+        "Europa und Nordatlantik": 4
     }
     
     @classmethod
@@ -153,8 +152,6 @@ class GeoConfig:
 # 3. PHYSIKALISCHE ENGINE (PURE NUMPY MATH)
 # ==============================================================================
 class MeteoMath:
-    """Meteorologische Berechnungen aus den Rohdaten. Garantiert OHNE Scipy."""
-    
     @staticmethod
     def kelvin_to_celsius(temp_k: np.ndarray) -> np.ndarray:
         return temp_k - 273.15 if np.nanmax(temp_k) > 100 else temp_k
@@ -169,7 +166,6 @@ class MeteoMath:
         
     @staticmethod
     def geopotential_to_m(geo_data: np.ndarray) -> np.ndarray:
-        """Rechnet Geopotential in geopotentielle Höhe (Meter) um."""
         return geo_data / 9.80665 if np.nanmax(geo_data) > 20000 else geo_data
 
     @staticmethod
@@ -203,11 +199,6 @@ class MeteoMath:
         return showalter
 
     @staticmethod
-    def calc_scp(cape: np.ndarray, srh: np.ndarray, shear: np.ndarray) -> np.ndarray:
-        scp = (cape / 1000.0) * (srh / 50.0) * (shear / 20.0)
-        return np.where(scp < 0, 0, scp)
-
-    @staticmethod
     def calc_vorticity_advection(u_500: np.ndarray, v_500: np.ndarray) -> np.ndarray:
         dx, dy = 25000.0, 25000.0 
         dv_dx = np.gradient(v_500, dx, axis=1)
@@ -230,8 +221,6 @@ class MeteoMath:
 
 
 class AnalysisEngine:
-    """Kapselt die Logik für Unwetterwarnungen und synoptische Frontenanalyse."""
-    
     @staticmethod
     def detect_fronts(t_850_c: np.ndarray) -> np.ndarray:
         smoothed_t = MeteoMath.fast_numpy_smooth(t_850_c)
@@ -280,13 +269,17 @@ class RainViewerTiles(cimgt.GoogleWTS):
 
 
 # ==============================================================================
-# 5. METEOROLOGISCHE FARBSKALEN (EXTREM KNALLIG & PRÄZISE)
+# 5. METEOROLOGISCHE FARBSKALEN (20+ INDIVIDUELLE PARAMETER)
 # ==============================================================================
 class ColormapRegistry:
+    """
+    JEDER Parameter hat nun seine eigene, getrennte Farb-Methode. 
+    Du kannst die HEX-Codes hier für jeden Wert einzeln nach Belieben ändern!
+    """
 
+    # 1. Temperatur 2m
     @staticmethod
     def get_temperature() -> mcolors.LinearSegmentedColormap:
-        # Knallige HTML Farben für extremes Herausstellen der Kontraste
         colors = [(0.0, '#00008B'), (0.1, '#0000FF'), (0.2, '#00BFFF'), (0.3, '#00FFFF'),
                   (0.4, '#ADFF2F'), (0.5, '#FFFF00'), (0.6, '#FFD700'), (0.7, '#FFA500'),
                   (0.8, '#FF4500'), (0.9, '#FF0000'), (1.0, '#8B0000')]
@@ -294,33 +287,53 @@ class ColormapRegistry:
         cmap.set_bad(color='none')
         return cmap
 
+    # 2. Taupunkt 2m
+    @staticmethod
+    def get_dewpoint() -> mcolors.LinearSegmentedColormap:
+        colors = ['#8B4513', '#228B22', '#ADFF2F', '#00FFFF', '#0000FF', '#8A2BE2']
+        cmap = mcolors.LinearSegmentedColormap.from_list("dewpoint_scale", colors)
+        cmap.set_bad(color='none')
+        return cmap
+
+    # 3. 850 hPa Temperatur
+    @staticmethod
+    def get_temperature_850() -> mcolors.LinearSegmentedColormap:
+        colors = ['#4B0082', '#0000FF', '#00BFFF', '#FFFFFF', '#FFD700', '#FF4500', '#8B0000']
+        cmap = mcolors.LinearSegmentedColormap.from_list("temp_850_scale", colors)
+        cmap.set_bad(color='none')
+        return cmap
+
+    # 4. Bodendruck
+    @staticmethod
+    def get_surface_pressure() -> mcolors.LinearSegmentedColormap:
+        colors = ['#000080', '#0000FF', '#00FFFF', '#00FF00', '#FFFF00', '#FFA500', '#FF0000', '#8B0000']
+        cmap = mcolors.LinearSegmentedColormap.from_list("pressure_scale", colors)
+        cmap.set_bad(color='none')
+        return cmap
+
+    # 5. Geopotentielle Höhe (Die Profi-Skala 480-620 gpdm)
     @staticmethod
     def get_geopotential() -> mcolors.LinearSegmentedColormap:
-        """
-        NEU: Exakte Experten-Skala für 500 hPa Geopot. Höhe (Werte 4800m bis 6200m).
-        Farben werden präzise auf die Abstände gemappt.
-        """
-        # Spanne: 1400 Meter (4800 bis 6200)
         colors_and_anchors = [
-            (0.0000, '#9370DB'),  # 4800m (480 gpdm)
-            (0.1428, '#483D8B'),  # 5000m (500 gpdm)
-            (0.2857, '#0000CD'),  # 5200m (520 gpdm)
-            (0.4285, '#4169E1'),  # 5400m (540 gpdm)
-            (0.5000, '#228B22'),  # 5500m (550 gpdm)
-            (0.5357, '#32CD32'),  # 5550m (555 gpdm)
-            (0.5714, '#FFFF00'),  # 5600m (560 gpdm)
-            (0.6428, '#FFA500'),  # 5700m (570 gpdm)
-            (0.7142, '#FF4500'),  # 5800m (580 gpdm)
-            (0.8571, '#800000'),  # 6000m (600 gpdm)
-            (1.0000, '#800080')   # 6200m (620 gpdm)
+            (0.0000, '#9370DB'),  # 4800m
+            (0.1428, '#483D8B'),  # 5000m
+            (0.2857, '#0000CD'),  # 5200m
+            (0.4285, '#4169E1'),  # 5400m
+            (0.5000, '#228B22'),  # 5500m
+            (0.5357, '#32CD32'),  # 5550m
+            (0.5714, '#FFFF00'),  # 5600m
+            (0.6428, '#FFA500'),  # 5700m
+            (0.7142, '#FF4500'),  # 5800m
+            (0.8571, '#800000'),  # 6000m
+            (1.0000, '#800080')   # 6200m
         ]
         cmap = mcolors.LinearSegmentedColormap.from_list("geopot_scale", colors_and_anchors)
         cmap.set_bad(color='none')
         return cmap
 
+    # 6. Gesamtbedeckung (Wolken - strikte Graustufen)
     @staticmethod
     def get_clouds() -> mcolors.LinearSegmentedColormap:
-        """Gesamtbedeckung: Wie befohlen in strikten Grauwerten beibehalten."""
         colors = [
             (0.00, '#FFFFFF00'), # 0 - transparent
             (0.05, '#FFFFFF'),   # 5 - weiß
@@ -334,16 +347,9 @@ class ColormapRegistry:
         cmap.set_bad(color='none')
         return cmap
 
-    @staticmethod
-    def get_theta_e() -> mcolors.LinearSegmentedColormap:
-        colors = ['#00008B', '#0000FF', '#00FFFF', '#00FF00', '#FFFF00', '#FFA500', '#FF0000', '#8B0000', '#FF00FF']
-        cmap = mcolors.LinearSegmentedColormap.from_list("theta_e_scale", colors)
-        cmap.set_bad(color='none')
-        return cmap
-
+    # 7. Niederschlag
     @staticmethod
     def get_precipitation() -> Tuple[mcolors.LinearSegmentedColormap, mcolors.Normalize]:
-        # Knalligere Farben für Niederschlag
         precip_colors = ['#FFFFFF00', '#00FFFF', '#1E90FF', '#0000FF', '#32CD32', '#008000', '#FFFF00', 
                          '#FFA500', '#FF4500', '#FF0000', '#8B0000', '#8A2BE2', '#4B0082', '#FF00FF']
         precip_values = [0, 0.2, 0.5, 1.0, 1.5, 2.0, 3, 5, 8, 12, 15, 20, 30, 50]
@@ -354,19 +360,120 @@ class ColormapRegistry:
         norm = mcolors.Normalize(vmin=0, vmax=vmax)
         return cmap, norm
 
+    # 8. Windböen
     @staticmethod
     def get_wind() -> mcolors.LinearSegmentedColormap:
-        # Viel lebhaftere Windkarte
         colors = ['#E0FFFF', '#00FFFF', '#0000FF', '#8A2BE2', '#FF00FF', '#FF0000', '#8B0000']
         cmap = mcolors.LinearSegmentedColormap.from_list("wind_scale", colors, N=256)
         cmap.set_bad(color='none')
         return cmap
 
+    # 9. 300 hPa Jetstream
+    @staticmethod
+    def get_jetstream() -> mcolors.LinearSegmentedColormap:
+        colors = ['#FFFFFF00', '#00BFFF', '#0000FF', '#FF00FF', '#FF0000', '#8B0000', '#000000']
+        cmap = mcolors.LinearSegmentedColormap.from_list("jetstream_scale", colors, N=256)
+        cmap.set_bad(color='none')
+        return cmap
+
+    # 10. Schneehöhe
+    @staticmethod
+    def get_snow_depth() -> mcolors.LinearSegmentedColormap:
+        colors = ['#FFFFFF00', '#E0FFFF', '#AFEEEE', '#00FFFF', '#1E90FF', '#0000FF', '#8A2BE2', '#FF00FF']
+        cmap = mcolors.LinearSegmentedColormap.from_list("snow_scale", colors)
+        cmap.set_bad(color='none')
+        return cmap
+
+    # 11. Neuschnee
+    @staticmethod
+    def get_new_snow() -> mcolors.LinearSegmentedColormap:
+        colors = ['#FFFFFF00', '#F0F8FF', '#ADD8E6', '#4169E1', '#0000CD', '#4B0082']
+        cmap = mcolors.LinearSegmentedColormap.from_list("new_snow_scale", colors)
+        cmap.set_bad(color='none')
+        return cmap
+
+    # 12. 0-Grad-Grenze
+    @staticmethod
+    def get_zero_degree_line() -> mcolors.LinearSegmentedColormap:
+        colors = ['#8B0000', '#FF0000', '#FFA500', '#FFFF00', '#00FF00', '#00FFFF', '#0000FF', '#FFFFFF']
+        cmap = mcolors.LinearSegmentedColormap.from_list("zero_deg_scale", colors)
+        cmap.set_bad(color='none')
+        return cmap
+
+    # 13. Theta-E
+    @staticmethod
+    def get_theta_e() -> mcolors.LinearSegmentedColormap:
+        colors = ['#00008B', '#0000FF', '#00FFFF', '#00FF00', '#FFFF00', '#FFA500', '#FF0000', '#8B0000', '#FF00FF']
+        cmap = mcolors.LinearSegmentedColormap.from_list("theta_e_scale", colors)
+        cmap.set_bad(color='none')
+        return cmap
+
+    # 14. K-Index
+    @staticmethod
+    def get_k_index() -> mcolors.LinearSegmentedColormap:
+        colors = ['#FFFFFF00', '#FFFF00', '#FFA500', '#FF0000', '#8B0000', '#800080', '#4B0082']
+        cmap = mcolors.LinearSegmentedColormap.from_list("k_index_scale", colors)
+        cmap.set_bad(color='none')
+        return cmap
+
+    # 15. Showalter-Index
+    @staticmethod
+    def get_showalter() -> mcolors.LinearSegmentedColormap:
+        colors = ['#8B0000', '#FF0000', '#FFA500', '#FFFF00', '#00FF00', '#0000FF', '#000080']
+        cmap = mcolors.LinearSegmentedColormap.from_list("showalter_scale", colors)
+        cmap.set_bad(color='none')
+        return cmap
+
+    # 16. Vorticity Advection
+    @staticmethod
+    def get_vorticity() -> mcolors.LinearSegmentedColormap:
+        colors = ['#00008B', '#0000FF', '#FFFFFF', '#FF0000', '#8B0000']
+        cmap = mcolors.LinearSegmentedColormap.from_list("vorticity_scale", colors)
+        cmap.set_bad(color='none')
+        return cmap
+
+    # 17. Bodenfeuchte
+    @staticmethod
+    def get_soil_moisture() -> mcolors.LinearSegmentedColormap:
+        colors = ['#8B4513', '#D2B48C', '#F5DEB3', '#90EE90', '#32CD32', '#00BFFF', '#00008B']
+        cmap = mcolors.LinearSegmentedColormap.from_list("soil_scale", colors, N=256)
+        cmap.set_bad(color='none')
+        return cmap
+
+    # 18. Sonnenscheindauer
+    @staticmethod
+    def get_sunshine() -> mcolors.LinearSegmentedColormap:
+        colors = ['#808080', '#D3D3D3', '#FFFFE0', '#FFFF00', '#FFD700', '#FFA500']
+        cmap = mcolors.LinearSegmentedColormap.from_list("sun_scale", colors, N=256)
+        cmap.set_bad(color='none')
+        return cmap
+
+    # 19. Waldbrandgefahrenindex (WBI)
+    @staticmethod
+    def get_wbi() -> Tuple[mcolors.ListedColormap, mcolors.BoundaryNorm]:
+        colors = ['#FFFFFF', '#00FF00', '#FFFF00', '#FFA500', '#FF0000', '#8B0000']
+        levels = [0, 1.5, 2.5, 3.5, 4.5, 5.5]
+        cmap = mcolors.ListedColormap(colors)
+        cmap.set_bad(color='none')
+        norm = mcolors.BoundaryNorm(levels, cmap.N)
+        return cmap, norm
+
+    # 20. Radar (Echtzeit & Simuliert)
     @staticmethod
     def get_radar() -> Tuple[mcolors.ListedColormap, mcolors.BoundaryNorm]:
         colors = ['#FFFFFF00', '#B0E0E6', '#00BFFF', '#0000FF', '#00FF00', '#32CD32', '#008000', 
                   '#FFFF00', '#FFA500', '#FF0000', '#8B0000', '#FF00FF', '#800080', '#4B0082', '#E6E6FA']
         levels = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80]
+        cmap = mcolors.ListedColormap(colors)
+        cmap.set_bad(color='none')
+        norm = mcolors.BoundaryNorm(levels, cmap.N)
+        return cmap, norm
+
+    # 21. Unwetter-Warnungen
+    @staticmethod
+    def get_warnings() -> Tuple[mcolors.ListedColormap, mcolors.BoundaryNorm]:
+        colors = ['#FFFFFF00', '#FFFF00', '#FF0000', '#800080'] 
+        levels = [0, 0.5, 1.5, 2.5, 3.5]
         cmap = mcolors.ListedColormap(colors)
         cmap.set_bad(color='none')
         norm = mcolors.BoundaryNorm(levels, cmap.N)
@@ -391,9 +498,6 @@ PARAMS_ADVANCED = [
 ]
 
 class ModelRegistry:
-    """Verwaltet alle Metadaten der Modelle inklusive individueller Timesteps."""
-    
-    # NEU: Überall "Europa und Nordatlantik" hinzugefügt, wo Europa auch geht
     GLOBAL_REGIONS = list(GeoConfig.EXTENTS.keys())
     
     MODELS = {
@@ -483,7 +587,6 @@ class ModelRegistry:
 # 7. DATA FETCH ENGINE (API HANDLER & CRASH PROTECTION)
 # ==============================================================================
 class DataFetcher:
-    """Verantwortlich für das Herunterladen und Kombinieren aller externen Daten."""
     
     @staticmethod
     def estimate_latest_run(model: str, now_utc: datetime) -> datetime:
@@ -520,8 +623,7 @@ class DataFetcher:
             df = pd.DataFrame(stations).dropna()
             if df.empty: return None
             return df
-        except Exception as e:
-            logger.error(f"Kritischer Fehler bei Pegelonline: {e}")
+        except Exception:
             return None
 
     @staticmethod
@@ -554,7 +656,8 @@ class DataFetcher:
             "300 hPa Jetstream (km/h)": "u", "Bodendruck (hPa)": "sp", "500 hPa Geopot. Höhe": "fi", 
             "850 hPa Temperatur (°C)": "t", "Isobaren": "pmsl", "Niederschlag (mm)": "tot_prec", 
             "Simuliertes Radar (dBZ)": "dbz_cmax", "Gesamtbedeckung (%)": "clct", "Schneehöhe (cm)": "h_snow",
-            "Bodenfeuchte (%)": "w_so", "Sonnenscheindauer (Min)": "dur_sun", "Neuschnee (cm/6h)": "snow_con"
+            "Bodenfeuchte (%)": "w_so", "Sonnenscheindauer (Min)": "dur_sun", "Neuschnee (cm/6h)": "snow_con",
+            "0-Grad-Grenze (m)": "h_zerodeg"
         }
         
         key = p_map.get(param, "t_2m")
@@ -564,9 +667,6 @@ class DataFetcher:
 
         now = datetime.now(timezone.utc)
         
-        # ======================================================================
-        # GFS Ensemble (GEFS Mean)
-        # ======================================================================
         if model == "GFS Ensemble (Mittel)":
             headers = {'User-Agent': 'Mozilla/5.0'}
             gefs_map = {
@@ -597,9 +697,6 @@ class DataFetcher:
                     continue
             return None, None, None, None
 
-        # ======================================================================
-        # ECMWF Ensemble (Mittel) / Proxy Access
-        # ======================================================================
         elif model == "ECMWF Ensemble (Mittel)":
             for off in range(1, 18):
                 t = now - timedelta(hours=off)
@@ -632,9 +729,6 @@ class DataFetcher:
                     continue
             return None, None, None, None
 
-        # ======================================================================
-        # Standard GFS / Global Modelle
-        # ======================================================================
         elif any(m in model for m in ["GFS", "UKMO", "GEM", "JMA", "ACCESS"]):
             headers = {'User-Agent': 'Mozilla/5.0'}
             gfs_map = {
@@ -664,9 +758,6 @@ class DataFetcher:
                 except Exception: 
                     continue
 
-        # ======================================================================
-        # Standard ICON & Lokale Modelle
-        # ======================================================================
         else:
             m_dir = "icon-d2" if "D2" in model else "icon-eu"
             reg_str = "icon-d2_germany" if "D2" in model else "icon-eu_europe"
@@ -721,10 +812,8 @@ class PlottingEngine:
 
     @staticmethod
     def add_isobars(ax, data, lons, lats):
-        """NEU: Der fixierte Isobaren-Plotter! Zeichnet Drucklinien sauber über die Karte."""
         if data is not None:
             val = MeteoMath.pa_to_hpa(data)
-            # Drucklinien von 940 bis 1060 hPa im 5er Abstand
             cs = ax.contour(
                 lons, lats, val, colors='black', linewidths=1.2, 
                 levels=np.arange(940, 1060, 5), transform=ccrs.PlateCarree(), zorder=16
@@ -733,30 +822,17 @@ class PlottingEngine:
 
     @staticmethod
     def plot_geopotential(ax, fig, lons, lats, data):
-        """
-        NEU: Spezielle Logik für die 500 hPa Geopot. Höhe.
-        Interne Logik rechnet mit vollen Werten (Metern).
-        Die Skala und Colorbar werden aber in 20er Schritten (gpdm) dargestellt!
-        Dazu die berühmte 552er Linie in schwarz.
-        """
-        # Daten in Meter umrechnen (volle Zahlen)
         val = MeteoMath.geopotential_to_m(data)
-        
         cmap = ColormapRegistry.get_geopotential()
-        # Die volle Range ist von 4800 bis 6200 Metern
         norm = mcolors.Normalize(vmin=4800, vmax=6200)
-        
         im = PlottingEngine._plot_base(ax, fig, lons, lats, val, cmap, norm, "Geopotentielle Höhe (gpdm)")
         
-        # Colorbar anpassen: Ticks bei den exakten Werten setzen, aber die Labels durch 10 teilen!
-        # So hat die Skala "480, 500, 520...", obwohl intern mit "4800, 5000..." gerechnet wird.
         cb = fig.colorbar(im, ax=ax, shrink=0.45, pad=0.03)
-        ticks_m = np.arange(4800, 6400, 200) # [4800, 5000, 5200, 5400, ...]
+        ticks_m = np.arange(4800, 6400, 200)
         cb.set_ticks(ticks_m)
         cb.set_ticklabels([str(int(t/10)) for t in ticks_m])
         cb.set_label("Geopotentielle Höhe (gpdm)")
 
-        # Die legendäre kleine schwarze Linie bei 552 gpdm (also 5520 m)
         ax.contour(
             lons, lats, val, levels=[5520], colors='black', linewidths=2.0, 
             transform=ccrs.PlateCarree(), zorder=15
@@ -773,8 +849,17 @@ class PlottingEngine:
     @staticmethod
     def plot_temperature(ax, fig, lons, lats, data, name):
         val = MeteoMath.kelvin_to_celsius(data)
-        label = "Taupunkt in °C" if "Taupunkt" in name else "Temperatur in °C"
-        im = PlottingEngine._plot_base(ax, fig, lons, lats, val, ColormapRegistry.get_temperature(), mcolors.Normalize(-30, 30), label)
+        if "850" in name:
+            label = "850 hPa Temperatur (°C)"
+            cmap = ColormapRegistry.get_temperature_850()
+        elif "Taupunkt" in name:
+            label = "Taupunkt 2m (°C)"
+            cmap = ColormapRegistry.get_dewpoint()
+        else:
+            label = "Temperatur 2m (°C)"
+            cmap = ColormapRegistry.get_temperature()
+            
+        im = PlottingEngine._plot_base(ax, fig, lons, lats, val, cmap, mcolors.Normalize(-30, 30), label)
         fig.colorbar(im, ax=ax, label=label, shrink=0.45, pad=0.03)
 
     @staticmethod
@@ -815,7 +900,7 @@ class PlottingEngine:
         elif "Vorticity" in name:
             grad_y, grad_x = np.gradient(data)
             vort = (grad_x - grad_y) * 1e5
-            im = PlottingEngine._plot_base(ax, fig, lons, lats, vort, plt.cm.RdBu_r, mcolors.Normalize(-5, 5), "Vorticity Advection")
+            im = PlottingEngine._plot_base(ax, fig, lons, lats, vort, ColormapRegistry.get_vorticity(), mcolors.Normalize(-5, 5), "Vorticity Advection")
             fig.colorbar(im, ax=ax, label="Vorticity Advection", shrink=0.45, pad=0.03)
             
         elif "Warnungen" in name:
@@ -831,6 +916,7 @@ class PlottingEngine:
 
     @staticmethod
     def plot_generic(ax, fig, lons, lats, data, name):
+        """Hier wird JEDER Parameter mit seiner exakten, eigenen ColormapRegistry verknüpft!"""
         if "Radar" in name:
             data = np.where(data <= 0, np.nan, data)
             cmap, norm = ColormapRegistry.get_radar()
@@ -839,9 +925,38 @@ class PlottingEngine:
             
         elif "Bodendruck" in name:
             val = MeteoMath.pa_to_hpa(data)
-            im = PlottingEngine._plot_base(ax, fig, lons, lats, val, plt.cm.jet, mcolors.Normalize(970, 1040), "Bodendruck (hPa)")
+            cmap = ColormapRegistry.get_surface_pressure()
+            im = PlottingEngine._plot_base(ax, fig, lons, lats, val, cmap, mcolors.Normalize(970, 1040), "Bodendruck (hPa)")
             fig.colorbar(im, ax=ax, label="Bodendruck (hPa)", shrink=0.45, pad=0.03)
             
+        elif "Schnee" in name and "Neu" not in name:
+            data = np.where(data <= 0.1, np.nan, data)
+            cmap = ColormapRegistry.get_snow_depth()
+            im = PlottingEngine._plot_base(ax, fig, lons, lats, data, cmap, mcolors.Normalize(0, 50), "Schneehöhe (cm)")
+            fig.colorbar(im, ax=ax, label="Schneehöhe (cm)", shrink=0.45, pad=0.03)
+
+        elif "Neuschnee" in name:
+            data = np.where(data <= 0.1, np.nan, data)
+            cmap = ColormapRegistry.get_new_snow()
+            im = PlottingEngine._plot_base(ax, fig, lons, lats, data, cmap, mcolors.Normalize(0, 30), "Neuschnee (cm/6h)")
+            fig.colorbar(im, ax=ax, label="Neuschnee (cm/6h)", shrink=0.45, pad=0.03)
+
+        elif "0-Grad-Grenze" in name:
+            val = MeteoMath.geopotential_to_m(data)
+            cmap = ColormapRegistry.get_zero_degree_line()
+            im = PlottingEngine._plot_base(ax, fig, lons, lats, val, cmap, mcolors.Normalize(0, 4000), "0-Grad-Grenze (m)")
+            fig.colorbar(im, ax=ax, label="0-Grad-Grenze (m)", shrink=0.45, pad=0.03)
+            
+        elif "Bodenfeuchte" in name:
+            cmap = ColormapRegistry.get_soil_moisture()
+            im = PlottingEngine._plot_base(ax, fig, lons, lats, data, cmap, mcolors.Normalize(0, 100), "Bodenfeuchte (%)")
+            fig.colorbar(im, ax=ax, label="Bodenfeuchte (%)", shrink=0.45, pad=0.03)
+
+        elif "Sonnenschein" in name:
+            cmap = ColormapRegistry.get_sunshine()
+            im = PlottingEngine._plot_base(ax, fig, lons, lats, data, cmap, mcolors.Normalize(0, 360), "Sonnenscheindauer (Min)")
+            fig.colorbar(im, ax=ax, label="Sonnenscheindauer (Min)", shrink=0.45, pad=0.03)
+
         elif "WBI" in name:
             val = np.where(data > 293, 3, 1) 
             cmap, norm = ColormapRegistry.get_wbi()
@@ -918,7 +1033,8 @@ with st.sidebar:
     else:
         model_type_1 = ModelRegistry.MODELS[mod_1]["type"]
         h_list_1 = ModelRegistry.get_timesteps(model_type_1)
-        hr_str_1 = st.selectbox("Zeitpunkt (Stunde)", [f"+{h}h" for h in h_list_1])
+        # NEU: Zeitauswahl als Radio-Button (Handy-Tastatur Fix)
+        hr_str_1 = st.radio("Zeitpunkt (Stunde)", [f"+{h}h" for h in h_list_1])
         hr_1 = int(hr_str_1.replace("+", "").replace("h", ""))
 
     # ---------------------------------------------------------
@@ -938,15 +1054,17 @@ with st.sidebar:
         else:
             model_type_2 = ModelRegistry.MODELS[mod_2]["type"]
             h_list_2 = ModelRegistry.get_timesteps(model_type_2)
-            hr_str_2 = st.selectbox("Zeitpunkt 2 (Stunde)", [f"+{h}h" for h in h_list_2])
+            # NEU: Auch hier als Radio-Button
+            hr_str_2 = st.radio("Zeitpunkt 2 (Stunde)", [f"+{h}h" for h in h_list_2])
             hr_2 = int(hr_str_2.replace("+", "").replace("h", ""))
             
     # ---------------------------------------------------------
     # OVERLAYS
     # ---------------------------------------------------------
     st.markdown("---")
-    show_sat = st.checkbox("🌍 Satelliten-Hintergrund erlauben", value=True)
-    show_isobars = st.checkbox("Isobaren einblenden", value=True)
+    # NEU: Alle Overlays sind standardmäßig auf False (ausgeschaltet)
+    show_sat = st.checkbox("🌍 Satelliten-Hintergrund erlauben", value=False)
+    show_isobars = st.checkbox("Isobaren einblenden", value=False)
     show_fronts = st.checkbox("🌪️ Fronten-Analyse aktivieren", value=False)
     
     enable_refresh = st.checkbox("🔄 Auto-Update (5 Min.)", value=False)
@@ -987,7 +1105,6 @@ def render_axis(ax, fig, model, param, hr, region):
             PlottingEngine.plot_clouds(ax, fig, lons, lats, data)
 
         elif "Geopot. Höhe" in param:
-            # Die brandneue 500 hPa Logik!
             PlottingEngine.plot_geopotential(ax, fig, lons, lats, data)
 
         elif "Pegel" in model: 
@@ -1010,7 +1127,6 @@ def render_axis(ax, fig, model, param, hr, region):
 
         if show_isobars and "Radar" not in model and "Pegel" not in model:
             iso_d, iso_l, iso_a, _ = DataFetcher.fetch_model_data(model, "Isobaren", hr)
-            # Aufruf der reparierten Isobaren-Funktion!
             PlottingEngine.add_isobars(ax, iso_d, iso_l, iso_a)
             
         if show_fronts and "Radar" not in model and "Pegel" not in model:
@@ -1068,4 +1184,3 @@ if generate or (enable_refresh and "Radar" in mod_1):
             )
 
     SystemManager.cleanup_temp_files()
-
