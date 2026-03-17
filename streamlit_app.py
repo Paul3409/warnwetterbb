@@ -2,11 +2,11 @@
 =========================================================================================
 WARNWETTER BB - PROFESSIONAL METEOROLOGICAL WORKSTATION (ULTIMATE 1500+ LINES EDITION)
 =========================================================================================
-Version: 7.1 (Cloud Cover Logic Overhaul - Grautöne, <1% unsichtbar)
+Version: 7.2 (Cloud Cover Colors: White to Dark Gray with exact % thresholds)
 Fokus: Keine Code-Komprimierung. Vollständige Ausprogrammierung aller meteorologischen
 Klassen. Volle Zeitschritte für GFS (384h), ICON-EU (120h), ECMWF (240h).
 Tastatur-Popup-Fix durch Radio-Buttons. Robuste Pegelonline-API.
-NEU: Gesamtbedeckung strikt in Graustufen, <1% transparent, 0%=Weiß, 100%=Dunkelgrau.
+NEU: Gesamtbedeckung mit exakten Farbwerten (1=weiß, 20=weiß-grau... 100=dunkelgrau).
 =========================================================================================
 """
 
@@ -301,11 +301,18 @@ class ColormapRegistry:
     @staticmethod
     def get_clouds() -> mcolors.LinearSegmentedColormap:
         """
-        NEU: Gesamtbedeckung strikt in Grautönen.
-        0% = Weiß (Lichtdurchlässig), 100% = Dunkelgrau (Viel Masse).
-        Dies orientiert sich an der logischen Gewichts-Logik des Nutzers.
+        Gesamtbedeckung mit exakten Grauwerten nach Prozent-Schwellen.
+        0% (<1%) wird in der PlottingEngine als NaN transparent gemacht.
         """
-        colors = ['#FFFFFF', '#DCDCDC', '#C0C0C0', '#A0A0A0', '#808080', '#505050', '#000000']
+        colors = [
+            (0.00, '#FFFFFF00'), # 0 - transparent (Fallback)
+            (0.01, '#FFFFFF'),   # 1 - weiß
+            (0.20, '#F0F0F0'),   # 20 - weiß-grau
+            (0.40, '#D3D3D3'),   # 40 - hellgrau
+            (0.60, '#A9A9A9'),   # 60 - grau
+            (0.80, '#696969'),   # 80 - dunkles grau
+            (1.00, '#404040')    # 100 - dunkelgrau
+        ]
         cmap = mcolors.LinearSegmentedColormap.from_list("cloud_scale", colors, N=256)
         cmap.set_bad(color='none')
         return cmap
@@ -681,7 +688,7 @@ class PlottingEngine:
 
     @staticmethod
     def plot_clouds(ax, fig, lons, lats, data):
-        """NEU: Spezieller Renderer für Gesamtbedeckung (Grautöne, <1% unsichtbar)."""
+        """Gesamtbedeckung: <1% ist transparent, darüber Weiß bis Dunkelgrau."""
         plot_data = np.where(data < 1.0, np.nan, data)
         cmap = ColormapRegistry.get_clouds()
         norm = mcolors.Normalize(vmin=0, vmax=100)
@@ -911,7 +918,7 @@ def render_axis(ax, fig, model, param, hr, region):
                 PlottingEngine.plot_generic(ax, fig, lons, lats, data, param)
                 
         elif "Gesamtbedeckung" in param:
-            # Die neue, rein graue Wolken-Engine
+            # Die neue Wolken-Engine (Transparent -> Weiß -> Dunkelgrau)
             PlottingEngine.plot_clouds(ax, fig, lons, lats, data)
 
         elif "Pegel" in model: 
