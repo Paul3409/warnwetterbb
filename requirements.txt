@@ -8,3 +8,4 @@ cfgrib
 folium
 streamlit-folium
 pykdtree
+scipy.ndimage
