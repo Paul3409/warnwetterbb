@@ -2,13 +2,14 @@
 =========================================================================================
 WARNWETTER BB - PROFESSIONAL METEOROLOGICAL WORKSTATION (ULTIMATE 2500+ LINES EDITION)
 =========================================================================================
-Version: 16.0 (The "Full Arsenal & Absolute Redemption" Edition)
-Fokus: ALLE Modelle wiederhergestellt, 100% Ausprogrammierung, perfekte Parameter-Filterung.
+Version: 16.1 (The "Full Arsenal & Accumulated Precipitation" Edition)
+Fokus: ALLE Modelle wiederhergestellt, 100% Ausprogrammierung, Akkumulierter Niederschlag.
 NEU / WIEDER DA:
+- Akkumulierter Niederschlag (mm) für ALLE Modelle hinzugefügt!
+- Eigene High-Range Farbskala für akkumulierten Niederschlag (bis 400mm).
 - ALLE Global- und Ensemble-Modelle (UKMO, GEM, Arpege, JMA, ACCESS-G, ECMWF Ens, GFS Ens)
-  sind wieder im System!
+  sind voll funktionstüchtig im System!
 - Perfektes Mapping: Jedes Modell hat jetzt eine maßgeschneiderte Parameter-Liste. 
-  (z.B. Bodendruck bei ICON-D2 entfernt, Profi-Indizes nur bei GFS/ICON verfügbar).
 BEIBEHALTEN:
 - Nativer HTML5-Download-Knopf für APK-Nutzer.
 - Niederschlags-Overlay für die Bewölkungskarte.
@@ -327,6 +328,18 @@ class ColormapRegistry:
         return cmap, norm
 
     @staticmethod
+    def get_acc_precipitation() -> Tuple[mcolors.LinearSegmentedColormap, mcolors.Normalize]:
+        # Spezielle Farbskala für extreme akkumulierte Mengen (bis 400 mm)
+        colors = ['#FFFFFF00', '#B0E0E6', '#00BFFF', '#1E90FF', '#0000FF', '#32CD32', '#008000', 
+                  '#FFFF00', '#FFA500', '#FF4500', '#FF0000', '#8B0000', '#8A2BE2', '#4B0082', '#FF00FF']
+        values = [0, 1, 5, 10, 20, 30, 50, 75, 100, 125, 150, 200, 250, 300, 400]
+        vmax = 400.0
+        anchors = [v / vmax for v in values]
+        cmap = mcolors.LinearSegmentedColormap.from_list("acc_precip_scale", list(zip(anchors, colors)))
+        cmap.set_bad(color='none')
+        return cmap, mcolors.Normalize(vmin=0, vmax=vmax)
+
+    @staticmethod
     def get_wind() -> mcolors.LinearSegmentedColormap:
         colors = ['#E0FFFF', '#00FFFF', '#0000FF', '#8A2BE2', '#FF00FF', '#FF0000', '#8B0000']
         cmap = mcolors.LinearSegmentedColormap.from_list("wind_scale", colors, N=256)
@@ -433,7 +446,7 @@ class ColormapRegistry:
 
 
 # ==============================================================================
-# 6. MODEL REGISTRY (ALLE MODELLE, PERFEKT GETRENNTE PARAMETER)
+# 6. MODEL REGISTRY (ALLE MODELLE, PERFEKT GETRENNTE PARAMETER + AKK. NIEDERSCHLAG)
 # ==============================================================================
 
 class ModelRegistry:
@@ -456,7 +469,8 @@ class ModelRegistry:
                 "500 hPa Geopot. Höhe", 
                 "850 hPa Temperatur (°C)", 
                 "Temperatur 2m (°C)", 
-                "Niederschlag (mm)"
+                "Niederschlag (mm)",
+                "Akkumulierter Niederschlag (mm)"
             ],
             "type": "cfs_long"
         },
@@ -464,8 +478,8 @@ class ModelRegistry:
             "regions": GLOBAL_REGIONS,
             "params": [
                 "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)",
-                "Niederschlag (mm)", "Gesamtbedeckung (%)", "Schneehöhe (cm)", "850 hPa Temperatur (°C)", 
-                "500 hPa Geopot. Höhe", "300 hPa Jetstream (km/h)", "0-Grad-Grenze (m)",
+                "Niederschlag (mm)", "Akkumulierter Niederschlag (mm)", "Gesamtbedeckung (%)", "Schneehöhe (cm)", 
+                "850 hPa Temperatur (°C)", "500 hPa Geopot. Höhe", "300 hPa Jetstream (km/h)", "0-Grad-Grenze (m)",
                 "Theta-E (Äquivalentpotenzielle Temp.)", "K-Index (Gewitter)", "Vorticity Advection 500 hPa",
                 "Showalter-Index (Stabilität)", "Bodenfeuchte (%)", "Sonnenscheindauer (Min)", "Neuschnee (cm/6h)"
             ],
@@ -475,8 +489,8 @@ class ModelRegistry:
             "regions": ["Europa", "Europa und Nordatlantik"],
             "params": [
                 "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)",
-                "Niederschlag (mm)", "Gesamtbedeckung (%)", "Schneehöhe (cm)", "850 hPa Temperatur (°C)", 
-                "500 hPa Geopot. Höhe", "300 hPa Jetstream (km/h)", "0-Grad-Grenze (m)"
+                "Niederschlag (mm)", "Akkumulierter Niederschlag (mm)", "Gesamtbedeckung (%)", "Schneehöhe (cm)", 
+                "850 hPa Temperatur (°C)", "500 hPa Geopot. Höhe", "300 hPa Jetstream (km/h)", "0-Grad-Grenze (m)"
             ],
             "type": "gfs_ultra"
         },
@@ -484,8 +498,8 @@ class ModelRegistry:
             "regions": ["Deutschland", "Brandenburg (Gesamt)", "Berlin & Umland (Detail-Zoom)", "Mitteleuropa (DE, PL, CZ)", "Alpenraum"],
             "params": [
                 "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Niederschlag (mm)", 
-                "Gesamtbedeckung (%)", "Schneehöhe (cm)", "Signifikantes Wetter", "Simuliertes Radar (dBZ)",
-                "Waldbrandgefahrenindex (WBI)", "Unwetter-Warnungen"
+                "Akkumulierter Niederschlag (mm)", "Gesamtbedeckung (%)", "Schneehöhe (cm)", "Signifikantes Wetter", 
+                "Simuliertes Radar (dBZ)", "Waldbrandgefahrenindex (WBI)", "Unwetter-Warnungen"
             ],
             "type": "dwd_short"
         },
@@ -493,8 +507,8 @@ class ModelRegistry:
             "regions": GLOBAL_REGIONS,
             "params": [
                 "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)",
-                "Niederschlag (mm)", "Gesamtbedeckung (%)", "Schneehöhe (cm)", "850 hPa Temperatur (°C)", 
-                "500 hPa Geopot. Höhe", "Unwetter-Warnungen", "Bodenfeuchte (%)", "Sonnenscheindauer (Min)"
+                "Niederschlag (mm)", "Akkumulierter Niederschlag (mm)", "Gesamtbedeckung (%)", "Schneehöhe (cm)", 
+                "850 hPa Temperatur (°C)", "500 hPa Geopot. Höhe", "Unwetter-Warnungen", "Bodenfeuchte (%)", "Sonnenscheindauer (Min)"
             ],
             "type": "dwd_long"
         },
@@ -502,7 +516,7 @@ class ModelRegistry:
             "regions": GLOBAL_REGIONS,
             "params": [
                 "Temperatur 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", "Niederschlag (mm)", 
-                "Gesamtbedeckung (%)", "850 hPa Temperatur (°C)", "500 hPa Geopot. Höhe"
+                "Akkumulierter Niederschlag (mm)", "Gesamtbedeckung (%)", "850 hPa Temperatur (°C)", "500 hPa Geopot. Höhe"
             ],
             "type": "ecmwf_long"
         },
@@ -510,7 +524,7 @@ class ModelRegistry:
             "regions": ["Europa", "Europa und Nordatlantik"],
             "params": [
                 "Temperatur 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)", "Niederschlag (mm)", 
-                "Gesamtbedeckung (%)", "850 hPa Temperatur (°C)", "500 hPa Geopot. Höhe"
+                "Akkumulierter Niederschlag (mm)", "Gesamtbedeckung (%)", "850 hPa Temperatur (°C)", "500 hPa Geopot. Höhe"
             ],
             "type": "ecmwf_long"
         },
@@ -518,8 +532,8 @@ class ModelRegistry:
             "regions": GLOBAL_REGIONS,
             "params": [
                 "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)",
-                "Niederschlag (mm)", "Gesamtbedeckung (%)", "Schneehöhe (cm)", "850 hPa Temperatur (°C)", 
-                "500 hPa Geopot. Höhe", "300 hPa Jetstream (km/h)"
+                "Niederschlag (mm)", "Akkumulierter Niederschlag (mm)", "Gesamtbedeckung (%)", "Schneehöhe (cm)", 
+                "850 hPa Temperatur (°C)", "500 hPa Geopot. Höhe", "300 hPa Jetstream (km/h)"
             ],
             "type": "ecmwf_long"
         },
@@ -527,8 +541,8 @@ class ModelRegistry:
             "regions": GLOBAL_REGIONS,
             "params": [
                 "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)",
-                "Niederschlag (mm)", "Gesamtbedeckung (%)", "Schneehöhe (cm)", "850 hPa Temperatur (°C)", 
-                "500 hPa Geopot. Höhe", "300 hPa Jetstream (km/h)"
+                "Niederschlag (mm)", "Akkumulierter Niederschlag (mm)", "Gesamtbedeckung (%)", "Schneehöhe (cm)", 
+                "850 hPa Temperatur (°C)", "500 hPa Geopot. Höhe", "300 hPa Jetstream (km/h)"
             ],
             "type": "ecmwf_long"
         },
@@ -536,7 +550,7 @@ class ModelRegistry:
             "regions": ["Deutschland", "Mitteleuropa (DE, PL, CZ)", "Süddeutschland / Alpen", "Europa", "Europa und Nordatlantik"],
             "params": [
                 "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)",
-                "Niederschlag (mm)", "Gesamtbedeckung (%)", "Schneehöhe (cm)", "Simuliertes Radar (dBZ)"
+                "Niederschlag (mm)", "Akkumulierter Niederschlag (mm)", "Gesamtbedeckung (%)", "Schneehöhe (cm)", "Simuliertes Radar (dBZ)"
             ],
             "type": "ecmwf_long"
         },
@@ -544,8 +558,8 @@ class ModelRegistry:
             "regions": GLOBAL_REGIONS,
             "params": [
                 "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)",
-                "Niederschlag (mm)", "Gesamtbedeckung (%)", "Schneehöhe (cm)", "850 hPa Temperatur (°C)", 
-                "500 hPa Geopot. Höhe"
+                "Niederschlag (mm)", "Akkumulierter Niederschlag (mm)", "Gesamtbedeckung (%)", "Schneehöhe (cm)", 
+                "850 hPa Temperatur (°C)", "500 hPa Geopot. Höhe"
             ],
             "type": "gfs_ultra"
         },
@@ -553,8 +567,8 @@ class ModelRegistry:
             "regions": GLOBAL_REGIONS,
             "params": [
                 "Temperatur 2m (°C)", "Taupunkt 2m (°C)", "Windböen (km/h)", "Bodendruck (hPa)",
-                "Niederschlag (mm)", "Gesamtbedeckung (%)", "Schneehöhe (cm)", "850 hPa Temperatur (°C)", 
-                "500 hPa Geopot. Höhe"
+                "Niederschlag (mm)", "Akkumulierter Niederschlag (mm)", "Gesamtbedeckung (%)", "Schneehöhe (cm)", 
+                "850 hPa Temperatur (°C)", "500 hPa Geopot. Höhe"
             ],
             "type": "gfs_ultra"
         }
@@ -647,15 +661,30 @@ class DataFetcher:
             return h, p, None, t
 
         p_map = {
-            "Temperatur 2m (°C)": "t_2m", "Taupunkt 2m (°C)": "td_2m", "Windböen (km/h)": "vmax_10m", 
-            "300 hPa Jetstream (km/h)": "u", "Bodendruck (hPa)": "pmsl", "500 hPa Geopot. Höhe": "fi", 
-            "850 hPa Temperatur (°C)": "t", "Isobaren": "pmsl", "Niederschlag (mm)": "tot_prec", 
-            "Simuliertes Radar (dBZ)": "dbz_cmax", "Gesamtbedeckung (%)": "clct", "Schneehöhe (cm)": "h_snow",
-            "0-Grad-Grenze (m)": "h_zerodeg", "Signifikantes Wetter": "ww", "Bodenfeuchte (%)": "w_so", 
-            "Sonnenscheindauer (Min)": "dur_sun", "Neuschnee (cm/6h)": "snow_con",
-            "Waldbrandgefahrenindex (WBI)": "vmax_10m", "Unwetter-Warnungen": "vmax_10m", 
-            "Theta-E (Äquivalentpotenzielle Temp.)": "t", "K-Index (Gewitter)": "t", 
-            "Showalter-Index (Stabilität)": "t", "Vorticity Advection 500 hPa": "u"
+            "Temperatur 2m (°C)": "t_2m", 
+            "Taupunkt 2m (°C)": "td_2m", 
+            "Windböen (km/h)": "vmax_10m", 
+            "300 hPa Jetstream (km/h)": "u", 
+            "Bodendruck (hPa)": "pmsl", 
+            "500 hPa Geopot. Höhe": "fi", 
+            "850 hPa Temperatur (°C)": "t", 
+            "Isobaren": "pmsl", 
+            "Niederschlag (mm)": "tot_prec", 
+            "Akkumulierter Niederschlag (mm)": "tot_prec", # Beide zapfen die Gesamtmenge an
+            "Simuliertes Radar (dBZ)": "dbz_cmax", 
+            "Gesamtbedeckung (%)": "clct", 
+            "Schneehöhe (cm)": "h_snow",
+            "0-Grad-Grenze (m)": "h_zerodeg", 
+            "Signifikantes Wetter": "ww", 
+            "Bodenfeuchte (%)": "w_so", 
+            "Sonnenscheindauer (Min)": "dur_sun", 
+            "Neuschnee (cm/6h)": "snow_con",
+            "Waldbrandgefahrenindex (WBI)": "vmax_10m", 
+            "Unwetter-Warnungen": "vmax_10m", 
+            "Theta-E (Äquivalentpotenzielle Temp.)": "t", 
+            "K-Index (Gewitter)": "t", 
+            "Showalter-Index (Stabilität)": "t", 
+            "Vorticity Advection 500 hPa": "u"
         }
         
         key = p_map.get(param, "t_2m")
@@ -704,7 +733,6 @@ class DataFetcher:
         elif any(m in model for m in ["GFS", "UKMO", "GEM", "JMA", "ACCESS"]):
             headers = {'User-Agent': 'Mozilla/5.0'}
             
-            # Unterscheidung ob es das GFS Ensemble ist oder Single Run
             is_gefs = "Ensemble" in model
             script = "filter_gefs_atmos_0p50a.pl" if is_gefs else "filter_gfs_0p25.pl"
             file_prefix = "geavg.t" if is_gefs else "gfs.t"
@@ -758,7 +786,6 @@ class DataFetcher:
             
             for off in range(1, 18):
                 t = now - timedelta(hours=off)
-                # D2 und Arpege rechnen öfter (3h), EU und EPS seltener (6h)
                 interval = 3 if any(m in model for m in ["D2", "Arpege"]) else 6
                 run = (t.hour // interval) * interval
                 dt_s = t.replace(hour=run, minute=0, second=0).strftime("%Y%m%d%H")
@@ -771,7 +798,6 @@ class DataFetcher:
                     elif key == "u": lvl_str = "300_"
                     else: lvl_str = "850_"
                 
-                # Ausnahme für EPS Namensgebung
                 if "Ensemble" in model:
                     url = f"https://opendata.dwd.de/weather/nwp/{m_dir}/grib/{run:02d}/{key}/{reg_str}_icosahedral_{l_type}_{dt_s}_{hr:03d}_{lvl_str}{key}.grib2.bz2"
                 else:
@@ -894,6 +920,28 @@ class PlottingEngine:
         
         if not overlay:
             fig.colorbar(im, ax=ax, label="Niederschlagssumme in mm", shrink=0.45, pad=0.03, ticks=list(range(0, 55, 5)))
+
+    @staticmethod
+    def plot_acc_precipitation(ax, fig, lons, lats, data):
+        # Spezielle Rendering-Funktion für extreme Summen
+        data = np.where(data <= 0.1, np.nan, data)
+        cmap, norm = ColormapRegistry.get_acc_precipitation()
+        
+        im = PlottingEngine._plot_base(
+            ax, 
+            fig, 
+            lons, 
+            lats, 
+            data, 
+            cmap, 
+            norm, 
+            "Akkumulierter Niederschlag (mm)", 
+            alpha=0.85, 
+            zorder=5
+        )
+        
+        ticks = [0, 5, 10, 20, 50, 100, 150, 200, 300]
+        fig.colorbar(im, ax=ax, label="Akkumulierter Niederschlag (mm)", shrink=0.45, pad=0.03, ticks=ticks)
 
     @staticmethod
     def plot_sig_weather(ax, fig, lons, lats, data):
@@ -1090,6 +1138,10 @@ def render_axis(ax, fig, model, param, hr, region):
         elif "Geopot. Höhe" in param: 
             PlottingEngine.plot_geopotential(ax, fig, lons, lats, data)
             
+        elif "Akkumulierter Niederschlag" in param: 
+            # WICHTIG: Muss vor "Niederschlag" abgefragt werden!
+            PlottingEngine.plot_acc_precipitation(ax, fig, lons, lats, data)
+            
         elif "Niederschlag" in param: 
             PlottingEngine.plot_precipitation(ax, fig, lons, lats, data)
             
@@ -1097,14 +1149,12 @@ def render_axis(ax, fig, model, param, hr, region):
             PlottingEngine.plot_sig_weather(ax, fig, lons, lats, data)
             
         elif "Pegel" in model:
-            # Pegel Logic calls specific engine
             pass
             
         else: 
             PlottingEngine.plot_generic(ax, fig, lons, lats, data, param)
 
         if show_isobars and "Radar" not in model and "Pegel" not in model:
-            # Holen uns den passenden Luftdruck fürs Modell
             iso_d, iso_l, iso_a, _ = DataFetcher.fetch_model_data(model, "Bodendruck (hPa)", hr)
             PlottingEngine.add_isobars(ax, iso_d, iso_l, iso_a)
 
