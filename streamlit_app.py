@@ -417,7 +417,7 @@ class ColormapRegistry:
         # 20cm (0.40) -> Sattes Blau (#0000FF)
         # 50cm (1.00) -> Tiefdunkelblau (#000080)
         # ---------------------------------------------------------
-        colors = [(0.0, '#FFFFFF00'), (0.1, '#FF83FA'), (0.2, '#BA55D3'), (0.4, '#9A32CD'), (0.7, '#68228B'), (1.0, '#5D478B')]
+        colors = [(0.0, '#228B22'), (0.1, '#F5E5FC'), (0.2, '#FDBAFC'), (0.4, '#FF87FF'), (0.7, '#F24AFF'), (1.0, '#B100C4')]
         cmap = mcolors.LinearSegmentedColormap.from_list("snow_scale", colors)
         cmap.set_bad(color='none')
         return cmap
