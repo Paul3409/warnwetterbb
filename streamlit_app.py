@@ -368,7 +368,7 @@ class ColormapRegistry:
 
     @staticmethod
     def get_snow_depth() -> mcolors.LinearSegmentedColormap:
-        colors = ['#FFFFFF00', '#fff0f5', '#dda0dd', '#00FFFF', '#1E90FF', '#0000FF', '#8A2BE2', '#FF00FF']
+        colors = ['#FFFFFF00', '#fff0f5', '#dda0dd', '#ee82ee', '#1E90FF', '#ba55d3', '#8a2be2', '#4b0082', '#483d8b']
         cmap = mcolors.LinearSegmentedColormap.from_list("snow_scale", colors)
         cmap.set_bad(color='none')
         return cmap
