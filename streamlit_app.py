@@ -2,9 +2,10 @@
 =========================================================================================
 WARNWETTER BB - PROFESSIONAL METEOROLOGICAL WORKSTATION (ULTIMATE 2500+ LINES EDITION)
 =========================================================================================
-Version: 16.1 (The "Full Arsenal & Accumulated Precipitation" Edition)
+Version: 16.2 (The "Full Arsenal & Custom Geopotential Colors" Edition)
 Fokus: ALLE Modelle wiederhergestellt, 100% Ausprogrammierung, Akkumulierter Niederschlag.
 NEU / WIEDER DA:
+- Geopotential 500 hPa Farbskala komplett nach Nutzer-Vorgabe (Hex-Codes) aktualisiert.
 - Akkumulierter Niederschlag (mm) für ALLE Modelle hinzugefügt!
 - Eigene High-Range Farbskala für akkumulierten Niederschlag (bis 400mm).
 - ALLE Global- und Ensemble-Modelle (UKMO, GEM, Arpege, JMA, ACCESS-G, ECMWF Ens, GFS Ens)
@@ -297,9 +298,21 @@ class ColormapRegistry:
     @staticmethod
     def get_geopotential() -> mcolors.LinearSegmentedColormap:
         colors_and_anchors = [
-            (0.0000, '#DA70D6'), (0.1428, '#8A2BE2'), (0.2857, '#483D8B'), (0.4285, '#4169E1'),
-            (0.5000, '#228B22'), (0.5357, '#32CD32'), (0.5714, '#FFFF00'), (0.6428, '#FFA500'),
-            (0.7142, '#FF4500'), (0.8571, '#800000'), (1.0000, '#800080')
+            (0.0000, '#dda0dd'), # 4800
+            (0.0714, '#ee82ee'), # 4900
+            (0.1429, '#ba55d3'), # 5000
+            (0.2143, '#6a5acd'), # 5100
+            (0.2857, '#191970'), # 5200
+            (0.3571, '#4169e1'), # 5300
+            (0.4286, '#20b2aa'), # 5400
+            (0.5000, '#008000'), # 5500
+            (0.5714, '#7cfc00'), # 5600
+            (0.6429, '#ffff00'), # 5700
+            (0.7143, '#ffa500'), # 5800
+            (0.7857, '#ff0000'), # 5900
+            (0.8571, '#800000'), # 6000
+            (0.9286, '#8b008b'), # 6100
+            (1.0000, '#4b0082')  # 6200
         ]
         cmap = mcolors.LinearSegmentedColormap.from_list("geopot_scale", colors_and_anchors)
         cmap.set_bad(color='none')
